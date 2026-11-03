@@ -1,0 +1,21 @@
+STEP=0
+STAGE=code_leak
+LABEL=Baseline: freed heap before code_consumer
+PSID=0x00007f149c476080
+BASE=0x00007f149c475080
+SIZE=8192
+HALF=4096
+---ZENDSTRING---
+refcount=1
+type_info=0x00000016
+hash=0x0000000000000000
+len=32
+val0=0x38
+---PATTERNS---
+s_field_PPPP=0
+a_field_xxxx=2145  offsets=[-8296, -8295, -8294, -8293, -8292, -8291, -8290, -8289, -8288, -8287, -8286, -8285, -8284, -8283, -8282, -8281, -8280, -8279, -8278, -8277]
+s0000=0
+s0072=0
+a0000=0
+a0069=0
+a0909=0

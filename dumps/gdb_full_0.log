@@ -1,0 +1,15 @@
+Breakpoint 1 at 0x25689e
+Breakpoint 2 at 0x615ee0
+Breakpoint 3 at 0x4bbb90
+[*] trace_fullheap.gdb loaded (STEP=0). Starting PHP...
+[Sat Oct 31 22:01:57 2026] PHP 8.4.26 Development Server (http://0.0.0.0:8080) started
+[Sat Oct 31 22:01:58 2026] 127.0.0.1:33517 Accepted
+[Sat Oct 31 22:01:58 2026] 127.0.0.1:33517 Closed without sending a request; it was probably just an unused speculative preconnection
+[Sat Oct 31 22:01:58 2026] 127.0.0.1:33517 Closing
+[Sat Oct 31 22:01:58 2026] 172.17.0.1:34108 Accepted
+[PHASE 1] OOM. PS(id)=0x7fa86e674000, len=32
+[PHASE 2] Heap freed.
+[DUMP] /tmp/heap_step_0.bin: 8192 bytes at 0x7fa86e673000
+[DUMP] metadata: /tmp/heap_step_0.txt
+[DUMP] Step 0 capture complete: Baseline: freed heap (before any consumer)
+[Sat Oct 31 22:01:58 2026] 172.17.0.1:34108 Closing

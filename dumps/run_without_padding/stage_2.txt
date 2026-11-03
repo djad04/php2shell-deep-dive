@@ -1,0 +1,23 @@
+run_label=without_padding
+stage=2
+label=Consumer php_session_reset_id (forged PS(id) about to be read)
+time=2026-11-04T11:11:57.963459
+psid_addr=0x00007fe2c4668000
+dump_base=0x00007fe2c4667000
+dump_size=8192
+
+[ZEND_STRING]
+refcount=3295053056
+type_info=0x7fe2
+hash=0xffffffffffffffff
+len=18446744073709551615
+val0=0xff
+val_hex=ffffffffffffffff02000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000d0000000e0000000f000000
+val_ascii=................................................................
+
+[ZENDMM]
+chunk_base=0x00007fe2c4600000
+page_index=104
+page_offset=0
+page_map_raw=0x0000000000000000
+kind=free-or-unknown

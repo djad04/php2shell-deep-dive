@@ -1,0 +1,22 @@
+Breakpoint 1 at 0x25689e
+Breakpoint 2 at 0x615ee0
+Breakpoint 3 at 0x4bab90
+Breakpoint 4 at 0x4bc820
+[*] capture_full_exploit.gdb loaded. label=without_padding
+[*] Breakpoints: _zend_bailout, zend_mm_shutdown, php_session_reset_id, php_session_flush
+[*] State: WAIT_OOM
+[Wed Nov  4 11:11:56 2026] PHP 8.4.26 Development Server (http://0.0.0.0:8080) started
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54394 Accepted
+[!] bailout but PS(id)=NULL
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54394 [200]: GET /php-version.php
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54394 Closing
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54396 Accepted
+[STAGE 0] OOM bailout (PS(id) valid, heap intact) | PS(id)=0x7fe2c4668000
+[STAGE 0] saved /dumps/run_without_padding/stage_0.bin | len=32, page=104, bin=?, slot=?
+[STAGE 1] Heap freed (after zend_mm_shutdown) | PS(id)=0x7fe2c4668000
+[STAGE 1] saved /dumps/run_without_padding/stage_1.bin | len=32, page=104, bin=?, slot=?
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54396 Closing
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54410 Accepted
+[STAGE 2] Consumer php_session_reset_id (forged PS(id) about to be read) | PS(id)=0x7fe2c4668000
+[STAGE 2] saved /dumps/run_without_padding/stage_2.bin | len=18446744073709551615, page=104, bin=?, slot=?
+[Wed Nov  4 11:11:57 2026] 127.0.0.1:54410 Closing

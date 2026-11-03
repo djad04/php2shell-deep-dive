@@ -1,0 +1,23 @@
+run_label=with_padding
+stage=1
+label=Heap freed (after zend_mm_shutdown)
+time=2026-11-04T11:11:49.809411
+psid_addr=0x00007f050c073000
+dump_base=0x00007f050c072000
+dump_size=8192
+
+[ZEND_STRING]
+refcount=1
+type_info=0x16
+hash=0x0
+len=32
+val0=0x38
+val_hex=3864306331633835313861643665643263666364623836653830376530383666
+val_ascii=8d0c1c8518ad6ed2cfcdb86e807e086f
+
+[ZENDMM]
+chunk_base=0x00007f050c000000
+page_index=115
+page_offset=0
+page_map_raw=0x0000000000000000
+kind=free-or-unknown

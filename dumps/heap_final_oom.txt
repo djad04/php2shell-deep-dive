@@ -1,0 +1,13 @@
+STEP=final_oom
+STAGE=final_callback
+LABEL=Stage 4: OOM (no PS(id), using ps_globals)
+CENTER=0x000055f0c26c9600
+BASE=0x000055f0c26c7600
+SIZE=16384
+---PATTERNS---
+primer_QQQQ=0
+hold_header=0
+forged_flags=0
+nested_field=0
+big_key_KKK=0
+zend_string_106=0

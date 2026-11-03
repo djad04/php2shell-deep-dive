@@ -1,0 +1,19 @@
+STEP=3
+LABEL=After padding + resize + forged key 1999 (len=256)
+PSID=0x00007f7125e74000
+BASE=0x00007f7125e73000
+SIZE=8192
+HALF=4096
+---ZENDSTRING---
+refcount=635912096
+type_info=0x00007f71
+hash=0x4141414141414141
+len=256
+val0=0x4c
+---PATTERNS---
+padding_v0000=0
+padding_v0050=1  offsets=[-72]
+padding_xxxx=2040  offsets=[-4067, -4066, -4065, -4064, -4063, -4062, -4061, -4060, -4059, -4058, -4057, -4056, -4055, -4054, -4053, -4052, -4051, -4050, -4049, -4048]
+resize_ZZZZ=0
+forged_AAAA=49  offsets=[8, 9, 10, 11, 12, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+forged_L=1  offsets=[24]

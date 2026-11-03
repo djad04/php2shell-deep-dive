@@ -1,0 +1,19 @@
+STEP=1
+LABEL=After 51 padding fields (keys 1000-1050, 48B each)
+PSID=0x00007ff784474000
+BASE=0x00007ff784473000
+SIZE=8192
+HALF=4096
+---ZENDSTRING---
+refcount=1
+type_info=0x00000016
+hash=0x0000000000000000
+len=48
+val0=0x76
+---PATTERNS---
+padding_v0000=0
+padding_v0050=2  offsets=[-72, 24]
+padding_xxxx=2080  offsets=[-4067, -4066, -4065, -4064, -4063, -4062, -4061, -4060, -4059, -4058, -4057, -4056, -4055, -4054, -4053, -4052, -4051, -4050, -4049, -4048]
+resize_ZZZZ=0
+forged_AAAA=0
+forged_L=0

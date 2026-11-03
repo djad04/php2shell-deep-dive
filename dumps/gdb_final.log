@@ -1,0 +1,12 @@
+Breakpoint 1 at 0x25689e
+Breakpoint 2 at 0x615ee0
+[*] trace_final.gdb loaded. Starting PHP...
+[Sat Oct 31 22:20:45 2026] PHP 8.4.26 Development Server (http://0.0.0.0:8080) started
+[Sat Oct 31 22:20:49 2026] 172.17.0.1:39134 Accepted
+[FINAL] OOM but no PS(id) — capturing around ps_globals
+    ps_globals at 0x55f0c26c9600
+[DUMP] /tmp/heap_final_oom.bin: 16384 bytes at 0x55f0c26c7600
+[DUMP] final_oom capture complete: Stage 4: OOM (no PS(id), using ps_globals)
+
+Program received signal SIGSEGV, Segmentation fault.
+0x000055f0c16c5e9a in zend_array_destroy ()

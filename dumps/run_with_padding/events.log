@@ -1,0 +1,12 @@
+[*] capture_full_exploit.gdb loaded. label=with_padding
+[*] Breakpoints: _zend_bailout, zend_mm_shutdown, php_session_reset_id, php_session_flush
+[*] State: WAIT_OOM
+[!] bailout but PS(id)=NULL
+[STAGE 0] OOM bailout (PS(id) valid, heap intact) | PS(id)=0x7f050c073000
+[STAGE 0] saved /dumps/run_with_padding/stage_0.bin | len=32, page=115, bin=28, slot=4
+[STAGE 1] Heap freed (after zend_mm_shutdown) | PS(id)=0x7f050c073000
+[STAGE 1] saved /dumps/run_with_padding/stage_1.bin | len=32, page=115, bin=?, slot=?
+[STAGE 2] Consumer php_session_reset_id (forged PS(id) about to be read) | PS(id)=0x7f050c073000
+[STAGE 2] saved /dumps/run_with_padding/stage_2.bin | len=256, page=115, bin=28, slot=4
+[STAGE 3] Consumer php_session_flush (after session processed) | PS(id)=0x7f050c073000
+[STAGE 3] saved /dumps/run_with_padding/stage_3.bin | len=47, page=115, bin=28, slot=4

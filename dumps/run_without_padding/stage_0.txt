@@ -1,0 +1,23 @@
+run_label=without_padding
+stage=0
+label=OOM bailout (PS(id) valid, heap intact)
+time=2026-11-04T11:11:57.916837
+psid_addr=0x00007fe2c4668000
+dump_base=0x00007fe2c4667000
+dump_size=8192
+
+[ZEND_STRING]
+refcount=1
+type_info=0x16
+hash=0x0
+len=32
+val0=0x61
+val_hex=6161643530636566303732336233633333303339363534323239326130323130
+val_ascii=aad50cef0723b3c330396542292a0210
+
+[ZENDMM]
+chunk_base=0x00007fe2c4600000
+page_index=104
+page_offset=0
+page_map_raw=0x0000000000000000
+kind=free-or-unknown

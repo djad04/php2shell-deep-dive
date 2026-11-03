@@ -1,0 +1,19 @@
+STEP=0
+LABEL=Baseline: freed heap (before any consumer)
+PSID=0x00007fa86e674000
+BASE=0x00007fa86e673000
+SIZE=8192
+HALF=4096
+---ZENDSTRING---
+refcount=1
+type_info=0x00000016
+hash=0x0000000000000000
+len=32
+val0=0x33
+---PATTERNS---
+padding_v0000=0
+padding_v0050=0
+padding_xxxx=0
+resize_ZZZZ=0
+forged_AAAA=0
+forged_L=0

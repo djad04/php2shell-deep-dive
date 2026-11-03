@@ -1,0 +1,31 @@
+run_label=with_padding
+stage=3
+label=Consumer php_session_flush (after session processed)
+time=2026-11-04T11:11:49.811996
+psid_addr=0x00007f050c073000
+dump_base=0x00007f050c072000
+dump_size=8192
+
+[ZEND_STRING]
+refcount=201797536
+type_info=0x7f05
+hash=0x0
+len=47
+val0=0x46
+val_hex=4661696c656420746f20726561642073657373696f6e20646174613a2066696c65732028706174683a202f746d7029
+val_ascii=Failed to read session data: files (path: /tmp)
+
+[ZENDMM]
+chunk_base=0x00007f050c000000
+page_index=115
+page_offset=0
+page_map_raw=0x00000000c003001c
+kind=small-run
+bin_number=28
+slot_size=2560
+run_pages=5
+run_base=0x00007f050c070000
+run_start_page=0x0000000000000070
+slot_index=4
+offset_in_slot=2048
+slots_per_run=8

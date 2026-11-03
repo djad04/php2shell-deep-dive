@@ -1,0 +1,22 @@
+Breakpoint 1 at 0x25689e
+Breakpoint 2 at 0x615ee0
+Breakpoint 3 at 0x4bbb90
+[*] trace_fullheap.gdb loaded (STEP=0). Starting PHP...
+[Sat Oct 31 22:02:10 2026] PHP 8.4.26 Development Server (http://0.0.0.0:8080) started
+[Sat Oct 31 22:02:10 2026] 127.0.0.1:45775 Accepted
+[Sat Oct 31 22:02:10 2026] 127.0.0.1:45775 Closed without sending a request; it was probably just an unused speculative preconnection
+[Sat Oct 31 22:02:10 2026] 127.0.0.1:45775 Closing
+[Sat Oct 31 22:02:11 2026] 172.17.0.1:55212 Accepted
+[PHASE 1] OOM. PS(id)=0x7fac15474000, len=32
+[PHASE 2] Heap freed.
+[Sat Oct 31 22:02:11 2026] 172.17.0.1:55212 Closing
+[Sat Oct 31 22:02:13 2026] 172.17.0.1:37008 Accepted
+[PHASE 3] Consumer done. len=48, val[0]=0x76
+[DUMP] /tmp/heap_step_2.bin: 8192 bytes at 0x7fac15473000
+[DUMP] metadata: /tmp/heap_step_2.txt
+[DUMP] Step 2 capture complete: After padding + key 1050 repeat (128B of Z)
+zend_mm_heap corrupted
+
+Program received signal SIGABRT, Aborted.
+__restore_sigs (set=set@entry=0x7fff581e9640) at ./arch/x86_64/syscall_arch.h:40
+warning: 40	./arch/x86_64/syscall_arch.h: No such file or directory
