@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PHP2Shell — Deep Dive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark-dimmed.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<style>
+:root {
+  --bg-primary: #2b2520;
+  --bg-parchment: #e8d5b7;
+  --bg-parchment-dark: #d9c4a3;
+  --bg-code: #1c1917;
+  --bg-code-inline: #3a3330;
+  --text-primary: #1f1610;
+  --text-secondary: #5c4a3a;
+  --text-heading: #b24126;
+  --text-link: #8b4513;
+  --text-link-hover: #a0522d;
+  --text-code: #e6d5c3;
+  --accent: #c4671d;
+  --accent-dim: #b24126;
+  --border: #b8a48c;
+  --border-light: #d4c4aa;
+  --shadow: rgba(43, 37, 32, 0.15);
+  --header-bg: #1c1917;
+  --header-text: #e8d5b7;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 15.5px;
+  font-weight: 500;
+  line-height: 1.8;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+/* Header */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--header-bg);
+  border-bottom: 3px solid var(--accent);
+  padding: 12px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.site-header .logo {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--header-text);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+
+.site-header .logo span {
+  color: var(--accent);
+}
+
+.site-header .meta {
+  font-size: 12px;
+  color: #8a7a6a;
+  letter-spacing: 1px;
+}
+
+.site-header .color-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.site-header .color-dots span {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.site-header .color-dots .c1 { background: #1c1917; border: 1px solid #444; }
+.site-header .color-dots .c2 { background: #c4671d; }
+.site-header .color-dots .c3 { background: #e8d5b7; }
+.site-header .color-dots .c4 { background: #d4a76a; }
+
+/* Progress bar */
+.progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  background: var(--accent);
+  z-index: 200;
+  transition: width 0.1s linear;
+  width: 0%;
+}
+
+/* Main content */
+.content-wrapper {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 32px 80px;
+  background: var(--bg-parchment);
+  min-height: 100vh;
+  box-shadow: 0 0 60px rgba(0,0,0,0.4);
+}
+
+/* Nav on scroll */
+.toc-sidebar {
+  position: fixed;
+  top: 60px;
+  left: max(16px, calc((100vw - 860px) / 2 - 260px));
+  width: 220px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  padding: 16px;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.toc-sidebar.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.toc-sidebar a {
+  display: block;
+  color: var(--header-text);
+  text-decoration: none;
+  padding: 3px 0;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  line-height: 1.4;
+}
+
+.toc-sidebar a:hover,
+.toc-sidebar a.active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* Typography */
+.article h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-heading);
+  margin: 48px 0 20px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--accent);
+  letter-spacing: 1px;
+}
+
+.article h2 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-heading);
+  margin: 48px 0 16px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.article h3 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-heading);
+  margin: 36px 0 12px;
+}
+
+.article h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent-dim);
+  margin: 28px 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.article p {
+  margin: 0 0 16px;
+  text-align: justify;
+  hyphens: auto;
+}
+
+.article a {
+  color: var(--text-link);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
+}
+
+.article a:hover {
+  color: var(--text-link-hover);
+  border-bottom-color: var(--text-link-hover);
+}
+
+.article strong {
+  color: var(--text-heading);
+  font-weight: 600;
+}
+
+.article em {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.article ul, .article ol {
+  margin: 0 0 16px 24px;
+}
+
+.article li {
+  margin-bottom: 6px;
+}
+
+.article hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 40px 0;
+}
+
+.article blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 12px 20px;
+  margin: 16px 0;
+  background: var(--bg-parchment-dark);
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+/* Code blocks */
+.article pre {
+  background: var(--bg-code);
+  color: var(--text-code);
+  border-radius: 6px;
+  padding: 20px 24px;
+  margin: 16px 0 20px;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  border: 1px solid #333;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  position: relative;
+}
+
+.article pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  border: none;
+}
+
+.article code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  background: var(--bg-code-inline);
+  color: var(--bg-parchment);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* Language label on code blocks */
+.article pre[data-lang]::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 2px 10px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #8a7a6a;
+  background: #252220;
+  border-radius: 0 6px 0 6px;
+  border-bottom: 1px solid #333;
+  border-left: 1px solid #333;
+}
+
+/* Images */
+.article img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 16px 0;
+  border: 2px solid var(--border-light);
+  box-shadow: 0 4px 16px var(--shadow);
+}
+
+.article img[src$=".svg"] {
+  border: none;
+  box-shadow: none;
+}
+
+.article img[align="right"] {
+  margin: 8px 0 16px 24px;
+}
+
+.article img[align="left"] {
+  margin: 8px 24px 16px 0;
+}
+
+/* ASCII diagrams / text blocks */
+.article pre code.language-text,
+.article pre code.language-txt {
+  color: #c8b89a;
+}
+
+/* Math blocks (LaTeX) */
+.math-block {
+  background: var(--bg-parchment-dark);
+  padding: 16px 24px;
+  margin: 16px 0;
+  border-radius: 4px;
+  text-align: center;
+  font-style: italic;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+/* Section separators */
+.section-marker {
+  text-align: center;
+  margin: 48px 0;
+  color: var(--accent);
+  font-size: 18px;
+  letter-spacing: 8px;
+}
+
+/* Footer */
+.site-footer {
+  background: var(--header-bg);
+  border-top: 3px solid var(--accent);
+  padding: 16px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #8a7a6a;
+  letter-spacing: 1px;
+}
+
+.site-footer .author {
+  font-weight: 600;
+  color: var(--header-text);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+/* Back to top */
+.back-to-top {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  background: var(--header-bg);
+  color: var(--header-text);
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.3s;
+  font-size: 18px;
+  text-decoration: none;
+  z-index: 50;
+}
+
+.back-to-top.visible {
+  opacity: 1;
+}
+
+.back-to-top:hover {
+  background: var(--accent);
+  color: var(--header-bg);
+}
+
+/* Loading state */
+.loading {
+  text-align: center;
+  padding: 80px 0;
+  color: var(--text-secondary);
+  font-size: 16px;
+}
+
+.loading .spinner {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 920px) {
+  .content-wrapper {
+    padding: 32px 16px 60px;
+  }
+
+  .toc-sidebar {
+    display: none;
+  }
+
+  .article h1 { font-size: 22px; }
+  .article h2 { font-size: 18px; }
+  .article pre { padding: 14px 16px; font-size: 12px; }
+  body { font-size: 13.5px; }
+}
+
+@media (max-width: 480px) {
+  .site-header { padding: 10px 16px; }
+  .site-header .logo { font-size: 15px; }
+  .site-header .color-dots { display: none; }
+  .site-footer { padding: 12px 16px; flex-direction: column; gap: 4px; }
+}
+
+/* Print styles */
+@media print {
+  .site-header, .site-footer, .progress-bar, .back-to-top, .toc-sidebar { display: none; }
+  .content-wrapper { box-shadow: none; max-width: 100%; }
+  body { background: white; }
+}
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progressBar"></div>
+
+<header class="site-header">
+  <div class="logo">&#9654; <span>PHP2SHELL</span></div>
+  <div class="color-dots">
+    <span class="c1"></span>
+    <span class="c2"></span>
+    <span class="c3"></span>
+    <span class="c4"></span>
+  </div>
+</header>
+
+<nav class="toc-sidebar" id="tocSidebar"></nav>
+
+<main class="content-wrapper">
+  <div class="article" id="article">
+    <div class="loading">
+      <div class="spinner"></div>
+      <br>Loading...
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <span class="author">DJAD_AR</span>
+  <a href="https://github.com/djad04/php2shell-deep-dive" target="_blank" rel="noopener" style="color:#e8d5b7;text-decoration:none;border-bottom:1px solid #c4671d;">GitHub Repo</a>
+  <span>PHP2SHELL — DEEP DIVE</span>
+</footer>
+
+<a href="#" class="back-to-top" id="backToTop" title="Back to top">&#8593;</a>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/c.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+  const article = document.getElementById('article');
+
+  marked.setOptions({
+    highlight: (code, lang) => {
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(code, { language: lang }).value;
+      }
+      try { return hljs.highlightAuto(code).value; }
+      catch { return code; }
+    },
+    breaks: false,
+    gfm: true
+  });
+
+  const renderer = new marked.Renderer();
+
+  renderer.code = function(obj) {
+    const code = typeof obj === 'object' ? obj.text : obj;
+    const lang = typeof obj === 'object' ? obj.lang : arguments[1];
+    let highlighted;
+    if (lang && hljs.getLanguage(lang)) {
+      highlighted = hljs.highlight(code, { language: lang }).value;
+    } else {
+      try { highlighted = hljs.highlightAuto(code).value; }
+      catch { highlighted = code; }
+    }
+    const attr = lang ? ` data-lang="${lang}"` : '';
+    return `<pre${attr}><code class="hljs${lang ? ' language-' + lang : ''}">${highlighted}</code></pre>`;
+  };
+
+  renderer.image = function(obj) {
+    const href = typeof obj === 'object' ? obj.href : obj;
+    const title = typeof obj === 'object' ? obj.title : arguments[1];
+    const text = typeof obj === 'object' ? obj.text : arguments[2];
+    return `<img src="${href}" alt="${text || ''}" loading="lazy"${title ? ' title="' + title + '"' : ''}>`;
+  };
+
+  renderer.heading = function(obj) {
+    const text = typeof obj === 'object' ? obj.text : obj;
+    const depth = typeof obj === 'object' ? obj.depth : arguments[1];
+    const raw = typeof obj === 'object' ? (obj.raw || text) : text;
+    const slug = raw.toLowerCase()
+      .replace(/<[^>]*>/g, '')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .trim();
+    return `<h${depth} id="${slug}">${text}</h${depth}>`;
+  };
+
+  renderer.paragraph = function(obj) {
+    const text = typeof obj === 'object' ? obj.text : obj;
+    if (text.startsWith('$$') && text.endsWith('$$')) {
+      const math = text.slice(2, -2).trim();
+      try {
+        const html = katex.renderToString(math, { displayMode: true, throwOnError: false });
+        return `<div class="math-block">${html}</div>`;
+      } catch { return `<div class="math-block">${math}</div>`; }
+    }
+    return `<p>${text}</p>`;
+  };
+
+  marked.setOptions({ renderer });
+
+  try {
+    const res = await fetch('Readme.md');
+    if (!res.ok) throw new Error('Failed to load Readme.md');
+    const md = await res.text();
+    article.innerHTML = marked.parse(md);
+    article.insertAdjacentHTML('beforeend',
+      '<hr><p style="text-align:center;margin:32px 0;font-size:14px;">' +
+      'Full source code, heap dumps, and interactive visualization available on ' +
+      '<a href="https://github.com/djad04/php2shell-deep-dive" target="_blank" rel="noopener"><strong>GitHub</strong></a></p>');
+    buildTOC();
+    setupScrollEffects();
+  } catch (err) {
+    article.innerHTML = `<p style="color:var(--accent)">Could not load Readme.md &mdash; ${err.message}</p>
+      <p>If you opened this file directly, serve it with a local server:<br>
+      <code>python3 -m http.server 8000</code></p>`;
+  }
+});
+
+function buildTOC() {
+  const sidebar = document.getElementById('tocSidebar');
+  const headings = document.querySelectorAll('.article h2, .article h3');
+  let html = '';
+  headings.forEach(h => {
+    const indent = h.tagName === 'H3' ? 'style="padding-left:12px;font-size:10px;"' : '';
+    html += `<a href="#${h.id}" ${indent}>${h.textContent}</a>`;
+  });
+  sidebar.innerHTML = html;
+}
+
+function setupScrollEffects() {
+  const progressBar = document.getElementById('progressBar');
+  const backToTop = document.getElementById('backToTop');
+  const tocSidebar = document.getElementById('tocSidebar');
+  const headings = Array.from(document.querySelectorAll('.article h2, .article h3'));
+  const tocLinks = Array.from(document.querySelectorAll('.toc-sidebar a'));
+
+  window.addEventListener('scroll', () => {
+    const scrollTop = window.scrollY;
+    const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+    const progress = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
+    progressBar.style.width = progress + '%';
+
+    if (scrollTop > 400) {
+      backToTop.classList.add('visible');
+      tocSidebar.classList.add('visible');
+    } else {
+      backToTop.classList.remove('visible');
+      tocSidebar.classList.remove('visible');
+    }
+
+    let current = '';
+    for (const h of headings) {
+      if (h.getBoundingClientRect().top <= 100) current = h.id;
+    }
+    tocLinks.forEach(a => {
+      a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+    });
+  });
+}
+</script>
+</body>
+</html>
