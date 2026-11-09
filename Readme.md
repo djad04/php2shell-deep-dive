@@ -2122,4 +2122,4 @@ A huge thank you to everyone who contributed, directly or indirectly, to making 
 
 - **[James Pavur (@pavja2)](https://github.com/pavja2)**, for creating the [Steal My Bitcoin](https://github.com/pavja2/smbc-source-oct-2026) challenge and giving the security community an opportunity to investigate PHP2Shell through a hands-on exploitation challenge.
 
-- **[KillaBoi (@KillaBoi)](https://github.com/KillaBoi)**, for publishing your [exploit](https://github.com/KillaBoi/StealMyBitcoin-PoC) and making it possible to study, reproduce, and compare your approach with my own. Congratulations again on solving the challenge!
+- **[KillaBoi (@KillaBoi)](https://github.com/KillaBoi)**, for publishing your [exploit](https://github.com/KillaBoi/StealMyBitcoin-PoC) and making it possible to study, reproduce, and compare. Congratulations again on solving the challenge!

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PHP2Shell — Deep Dive</title>
+<title>PHP2Shell</title>
 <meta name="description" content="A deep technical walkthrough of PHP2Shell — how CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26.">
 <meta property="og:title" content="PHP2Shell — Deep Dive">
 <meta property="og:description" content="From memory visualization to PHP source internals to exploit code. How two CVEs chain an OOM crash into RCE.">
@@ -204,10 +204,13 @@ body {
 <li><strong><a href="#the-trigger-php-does-the-dirty-work-here">The Trigger</a></strong>: PHP does the dirty work, real zend_hash_destroy code</li>
 <li><strong><a href="#the-real-payload-three-structures-in-one">Three Structures in One</a></strong>: ForgedArray + FakeExecuteData + FakeString in 384 bytes</li>
 <li><strong><a href="#real-practice-delivering-the-final-payload-stage-4">Final Payload (Stage 4)</a></strong>: forging a HashTable to hijack pDestructor and get RCE</li>
+<li><strong><a href="#the-primer-mechanism">The Primer Mechanism</a></strong>: how the freed primer's ghost in bucket[2] triggers the destruction chain</li>
 <li><strong><a href="#ok-the-command-is-running-how-does-its-output-get-back-to-us">Command Output Trick</a></strong>: finding your own TCP socket in /proc</li>
 <li><strong><a href="#the-full-four-stage-pipeline">The Full Pipeline</a></strong>: all four stages end to end</li>
+<li><strong><a href="#how-do-you-find-these-numbers-for-a-different-build">Calibrating for a Different Build</a></strong>: how every number comes from heap analysis of a specific PHP build</li>
 <li><strong><a href="#is-it-truly-that-easy-the-real-world-friction">Real World Friction</a></strong>: why this attack is way harder on a real production server</li>
 <li><strong><a href="#case-study-the-steal-my-bitcoin-challenge">Steal My Bitcoin CTF</a></strong>: the challenge that started all this</li>
+<li><strong><a href="#acknowledgements">Acknowledgements</a></strong>: credits and references</li>
 </ul>
 <p>If you're new to heap exploitation or want the full experience, just keep scrolling. I wrote this to be read start to finish.</p>
 <hr>
@@ -1311,6 +1314,175 @@ Reads pDestructor = zif_system → calls it with our command
       │
       ▼
 BOOM. Shell command executes.</code></pre>
+<h3 id="the-primer-mechanism">The primer mechanism:</h3>
+<p>The timeline above says that cleanup follows the primer's pointer. But how does that happen?</p>
+<p>The primer field has an empty name, meaning PHP never actually inserts it into $_POST. So how can a field that PHP immediately discards end up influencing where the cleanup routine goes?</p>
+<p>To understand this, lets first look at how PHP represents arrays and their elements internally.</p>
+<h4 id="how-php-stores-arrays-internally">How PHP stores arrays internally</h4>
+<p>Consider the following PHP array:</p>
+<pre data-lang="php"><code class="language-php">$data = [
+    "profile" =&gt; [
+        "name" =&gt; "Djad",
+        "age"  =&gt; 21
+    ]
+];</code></pre>
+<p>PHP stores each key-value pair inside a structure called a <strong>Bucket</strong>:</p>
+<pre data-lang="c"><code class="language-c">typedef struct _Bucket {
+    zval              val;
+    zend_ulong        h;
+    zend_string      *key;
+} Bucket;</code></pre>
+<p>Each Bucket stores three things:</p>
+<ul>
+<li><code>val</code> — the actual value (stored as a <code>zval</code> struct)</li>
+<li><code>h</code> — the hash of the key</li>
+<li><code>key</code> — a pointer to the key string</li>
+</ul>
+<p>The val field is a <strong>zval</strong>, which is the universal value container in PHP. Every PHP value, whether it's an integer, a string, an array, or an object, is wrapped in a zval. It's defined like this in the source code:</p>
+<pre data-lang="c"><code class="language-c">// From php-src/Zend/zend_types.h
+
+typedef struct _zval_struct {
+    zend_value        value;  /* The actual data (8 bytes) */
+    union {
+        uint32_t type_info;   /* Tells PHP WHAT type of data `value` holds */
+        struct {
+            ZEND_ENDIAN_LOHI_3(
+                zend_uchar    type,
+                zend_uchar    type_flags,
+                union {
+                    uint16_t  extra;
+                } u)
+        } v;
+    } u1;
+    union {
+        uint32_t     next;
+        uint32_t     cache_slot;
+        uint32_t     opline_num;
+        uint32_t     lineno;
+        uint32_t     num_args;
+        uint32_t     fe_pos;
+        uint32_t     fe_iter_idx;
+        uint32_t     guard;
+        uint32_t     constant_flags;
+        uint32_t     extra;
+    } u2;
+} zval;</code></pre>
+<p>Now look at the <code>value</code> field. It's of type <code>zend_value</code>, which is a union:</p>
+<pre data-lang="c"><code class="language-c">typedef union _zend_value {
+    zend_long         lval;
+    double            dval;
+    zend_refcounted  *counted;
+    zend_string      *str;
+    zend_array       *arr;      // &lt;-- a pointer to a nested array
+    zend_object      *obj;
+    zend_resource    *res;
+    zend_reference   *ref;
+    zend_ast_ref     *ast;
+    zval             *zv;
+    void             *ptr;
+} zend_value;</code></pre>
+<p>which is a lot too and that explains why we have a type but doesn't matter for now. Look at <code>zend_array *arr</code> because that's how PHP handles nested arrays.</p>
+<p>The outer array <code>$data = [ ];</code> stores its entries in buckets, and when a value like <code>"profile"</code> is itself an array, PHP puts a <strong>pointer</strong> to another <code>zend_array</code> in <code>val.value.arr</code>, and sets <code>type_info</code> to a flag that says "this points to an array." During cleanup, PHP sees that flag and launches a recursive cleaning, following the pointer to destroy the nested structures too.</p>
+<p>That's the normal, safe behavior. Now here's how the attacker abuses it.</p>
+<h4 id="the-primer-freed-instantly-but-its-ghost-stays-behind">The primer: freed instantly, but its ghost stays behind</h4>
+<p>The primer is a 276-byte string filled with <code>Q</code> characters (0x51) and the <strong>target heap address</strong> of our forged HashTable (the "hold" field). Its field name however is <strong>empty</strong> (<code>""</code>).</p>
+<p>When PHP processes the field, it eventually reaches php_register_variable_ex(). This function checks whether the variable name is empty:</p>
+<pre data-lang="c"><code class="language-c">if (*var == '\0') {
+    zval_ptr_dtor_nogc(val);  // free it immediately
+    return;                    // never added to any array
+}</code></pre>
+<p>Since the name is empty, PHP destroys the value and returns without inserting it into $_POST.</p>
+<p>So far, nothing unusual: the field is discarded, and its string allocation is released. And as we know the 320-byte memory slot goes back to the allocator's freelist.</p>
+<p>Since memory is never erased, some bytes may be overwritten by allocator bookkeeping but the rest stays exactly as it is, there waiting.</p>
+<h4 id="the-slot-gets-recycled-for-requests-bucket-array">The slot gets recycled for <code>$_REQUEST</code>'s bucket array</h4>
+<p>When the next field (<code>a=1</code>) is registered to <code>$_REQUEST</code>, it's the first string key inserted into that array, so PHP needs to allocate a bucket storage (<code>arData</code>) for the default table size of 8.</p>
+<p>if we want to dig into details the flow goes this way: The array gets created by <code>array_init()</code> with <code>HASH_FLAG_UNINITIALIZED</code> set (flags=0x08). Adding a string key triggers <code>zend_hash_real_init_mixed</code>, which needs to allocate the bucket array (<code>arData</code>).</p>
+<p>zend_hash_real_init_mixed has a fast path for the default table size (nTableSize=8). i verified this by disassembling the function at address 0x6c0a60 in the binary and got this:</p>
+<pre data-lang="text"><code class="language-text">; zend_hash_real_init_mixed
+cmp    $0x8,%eax             ; is nTableSize == 8?
+jne    generic_path           ; no → generic allocation
+call   _emalloc_320           ; yes → allocate EXACTLY 320 bytes!
+movl   $0xfffffff0,0xc(%rbx)  ; ht-&gt;nTableMask = -16
+lea    0x40(%rax),%rdx        ; arData = alloc_ptr + 0x40 (skip 64-byte hash index)
+mov    %rdx,0x10(%rbx)        ; ht-&gt;arData = alloc_ptr + 64
+; fill ONLY the first 64 bytes with 0xFFFFFFFF (hash index entries = "empty")
+movups %xmm0,(%rax)          ; bytes 0–15
+movups %xmm0,0x10(%rax)      ; bytes 16–31
+movups %xmm0,0x20(%rax)      ; bytes 32–47
+movups %xmm0,0x30(%rax)      ; bytes 48–63
+; that's it. The bucket area (bytes 64–319) is NOT touched.</code></pre>
+<p>here we got three things to notice:</p>
+<ol>
+<li><strong><code>_emalloc_320</code></strong> is a specialized fast allocator for the 320-byte bin. It pulls from the freelist. now remember The primer's slot is on that freelist. So it returns the <strong>exact same 320-byte slot the primer occupied</strong>.</li>
+<li><strong><code>nTableMask = -16</code></strong>, PHP 8.4.26 allocates 16 hash index slots (64 bytes) for 8 buckets (256 bytes). so the total allocation is 320 bytes, fitting exactly into one 320-byte bin slot.</li>
+<li><strong>Only the first 64 bytes are initialized</strong> (the hash index, filled with 0xFFFFFFFF to mark all slots as empty). The remaining 256 bytes, where the buckets live, are <strong>NOT zeroed</strong>. Whatever was in those bytes before (the primer's data) <strong>is still there</strong>.</li>
+</ol>
+<p>we can confirm this easily with a GDB trace:</p>
+<pre><code>primer_str_addr = 0x7f0475f6abc0       ← primer was here
+arData          = 0x7f0475f6ac00       ← $_REQUEST's bucket array is here
+alloc_base      = 0x7f0475f6abc0       ← arData - 64 = start of 320-byte slot
+
+*** CONFIRMED: arData alloc reuses primer's 320-byte slot***</code></pre>
+<h4 id="bucket2-falls-exactly-on-the-primers-target-pointer">bucket[2] falls exactly on the primer's target pointer:</h4>
+<p>Here's how the 320-byte slot looks with both identities overlaid:</p>
+<pre><code>Offset   What PHP sees now                What was there before (primer)
+──────   ───────────────────────          ─────────────────────────────
+0x00     hash index (64 bytes)            zend_string header + Q padding
+         initialized to 0xFFFFFFFF        (overwritten so doesn't matter)
+         ─── bucket array starts ───
+0x40     bucket[0]: key="a" val="1"       (overwritten by insertion)
+0x60     bucket[1]: key="hold" val=384B   (overwritten by insertion)
+0x80     bucket[2]: ???  NOT WRITTEN      val offset 104 = TARGET ADDRESS ← !!!
+0x88     bucket[2].type_info              = 0x51515151 (four Q bytes)
+0xA0     bucket[3..7]: NOT WRITTEN        more Q padding (doesn't matter)</code></pre>
+<p>Only bucket[0] and bucket[1] get overwritten when "a" and "hold" are inserted. bucket[2] through bucket[7] are never touched.</p>
+<p>and... keep this in mind this alignment is not a coincidence. The primer's slot 13 and the Q fill byte 0x51 were chosen specifically so that when the primer's memory is reused as arData, the raw bytes line up perfectly with a Bucket struct:</p>
+<pre><code>// What PHP THINKS it sees at bucket[2]:
+bucket[2].val.value.arr    = 0x00007efff7d6d1d8;  // target address → our forged HashTable
+bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer padding
+bucket[2].h                = 0x5151515151515151;   // irrelevant more Q padding
+bucket[2].key              = 0x5151515151515151;   // irrelevant more Q padding</code></pre>
+<p>Now look at that type_info value: 0x51515151, in PHP, the type_info field packs the type (bits 0-7) and several flags (bits 8+). Bit 8 is <code>IS_TYPE_REFCOUNTED</code>, which tells PHP "this value points to a refcounted object that needs cleanup." The value 0x51515151 in binary has bit 8 set. So PHP is tricked into believing bucket[2] contains a reference-counted value (like a nested array) that must be followed and destroyed in a recursive way.</p>
+<h4 id="oom-interrupted-insertion-creates-nnumused3-without-writing-bucket2">OOM-interrupted insertion creates nNumUsed=3 without writing bucket[2]:</h4>
+<p>But wait. If only <code>"a"</code> and <code>"hold"</code> were successfully inserted, shouldn't <code>$_REQUEST</code> have <code>nNumUsed = 2</code>? During cleanup, PHP would only iterate over <code>bucket[0]</code> and <code>bucket[1]</code>. It would never reach <code>bucket[2]</code>.</p>
+<p>So how does <code>bucket[2]</code> end up being walked?</p>
+<p>Before answering that, we should ask ourselves another question: <strong>Why is there another OOM at the very end of the exploit?</strong></p>
+<p>Remember, the OOM we triggered earlier was important because it allowed us to leave a stale pointer behind. Here the underlying idea is closely related:</p>
+<p>After "a" and "hold" are inserted, the giant field name (<code>K</code> × 128000 + <code>[x]</code>) arrives. PHP tries to add it to <code>$_REQUEST</code>.</p>
+<p>Inside <code>zend_hash_str_update()</code>, the new entry path performs the following operations:</p>
+<pre data-lang="text"><code class="language-text">; "add new entry" path in zend_hash_str_update
+mov    0x18(%r15),%ecx       ; ecx = nNumUsed (currently 2)
+addl   $0x1,0x1c(%r15)       ; nNumOfElements++ → 3
+mov    %eax,0x18(%r15)       ; nNumUsed = 3              ← WRITTEN TO MEMORY
+call   _emalloc              ; allocate the key string   ← OOM FIRES HERE!
+; ... code to write bucket[2] data is BELOW this point — never reached</code></pre>
+<p>Look closely at the order of operations.</p>
+<p>PHP increments nNumOfElements and updates nNumUsed to 3 before attempting to allocate memory for the new key string.</p>
+<p>Then _emalloc() fails because the requested allocation triggers an out-of-memory condition.</p>
+<p>The code that would normally initialize bucket[2] is never executed.</p>
+<p>But the important part is that the earlier metadata updates have already happened. The HashTable now reports nNumUsed = 3, even though the third bucket was never successfully initialized.</p>
+<p>And that is exactly what we need.</p>
+<p>When cleanup eventually iterates over the HashTable, it uses nNumUsed to determine how many bucket positions to walk. Since the value is now 3, cleanup can reach bucket[2] as well.</p>
+<h4 id="php-follows-the-trail">PHP follows the trail</h4>
+<p>During OOM cleanup, <code>zend_array_destroy</code> reads <code>nNumUsed=3</code> and starts cleaning the buckets one after another:</p>
+<ul>
+<li><strong>bucket[0]</strong> ("a" = "1"): type=IS_STRING → freed normally. Safe.</li>
+<li><strong>bucket[1]</strong> ("hold" = 384 bytes): type=IS_STRING → freed normally. Safe. But its value (the forged HashTable bytes) is already allocated at a known heap address.</li>
+<li><strong>bucket[2]</strong> (primer): it finds this:</li>
+</ul>
+<pre data-lang="c"><code class="language-c">bucket[2].val.value.arr    = 0x00007efff7d6d1d8;  // the target address from the primer
+bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer padding</code></pre>
+<p>PHP checks the <code>type_info</code> to figure out how to clean up this bucket. looks at the hex value <code>0x51515151</code> and finds out that this value points to a refcounted object, it needs to follow the pointer and destroy the whole chain.</p>
+<p>So PHP reads <code>val.value.arr</code> = <code>0x00007efff7d6d1d8</code> our <strong>target address</strong> and follows the pointer, believing it leads to a legitimate nested structure.</p>
+<h4 id="what-php-finds-at-the-target-address">What PHP finds at the target address</h4>
+<p>At the target address sits our forged HashTable (the "hold" field's content). The forged structure has its <code>gc.type</code> set to <code>IS_ARRAY</code>, so PHP treats it as a <code>zend_array</code> and calls <code>zend_array_destroy</code> on it.</p>
+<p>And how do you free an array? You call whatever <code>pDestructor</code> points to at offset 0x30 of the struct. Normally that's a safe cleanup function. But we wrote <code>zif_system</code> there, PHP's internal wrapper for the C <code>system()</code> function. PHP reads offset 0x30 of our forged table, jumps to <code>zif_system</code>, and executes whatever command we embedded in the forged bucket data.</p>
+<pre><code>primer freed → slot recycled for arData → bucket[2] = primer ghost
+    → OOM leaves nNumUsed=3 but bucket[2] never written
+    → cleanup reads bucket[2].type_info = 0x51515151 (IS_TYPE_REFCOUNTED)
+    → follows bucket[2].val.value.arr → forged HashTable
+    → gc.type = IS_ARRAY → zend_array_destroy
+    → pDestructor at offset 0x30 = zif_system → system(command) → RCE</code></pre>
 <h3 id="ok-the-command-is-running-how-does-its-output-get-back-to-us">ok the command is running.. how does its output get back to us?</h3>
 <img src="images/command.jpg" >
 <p>When <code>zif_system</code> executes our command, it calls the C <code>system()</code> function, which runs the command with <code>sh -c</code>. The command's stdout goes to... the PHP process's stdout. NOT to the HTTP response body.</p>
@@ -1371,10 +1543,10 @@ BOOM. Shell command executes.</code></pre>
 │  → command redirects output to TCP socket            │
 │  → attacker reads flag from response body            │
 └─────────────────────────────────────────────────────┘</code></pre>
-<p>Every stage depends on the previous one. If the heap leak fails, we can't calculate the target address. If the code leak fails, we can't find <code>zif_system</code>. If either address is wrong, the final stage crashes the worker instead of executing the command.That's why the exploit code calls this whole thing "one bounded attempt." It either works end-to-end or it doesn't. There's no partial success.</p>
+<p>Every stage depends on the previous one. If the heap leak fails, we can't calculate the target address. If the code leak fails, we can't find <code>zif_system</code>. If either address is wrong, the final stage crashes the worker instead of executing the command. That's why the exploit code calls this whole thing "one bounded attempt." It either works end-to-end or it doesn't. There's no partial success.</p>
 <h4 id="how-do-you-find-these-numbers-for-a-different-build">How Do You Find These Numbers for a Different Build?</h4>
 <p>Everything I just showed you: the 51 fields, the repeated key, the sizes all of it is calibrated for one specific build: PHP 8.4.26 Alpine CLI. A different PHP version, a different Linux distro, even a different compile time optimization flag could change which page the stale pointer ends up on, which would change everything.</p>
-<p>So what do we do?? we run the specific PHP build in a docker image and run it with GDB. and than we analyze the full state of the heap: where exactly the stale pointer gets allocated, which page it's on, which slot in which bin. From there, you work backward: how many pages need to be consumed to reach that spot, and what combination of fields and sizes produces that many pages.</p>
+<p>So what do we do?? We run the specific PHP build in a Docker image and run it with GDB. And then we analyze the full state of the heap: where exactly the stale pointer gets allocated, which page it's on, which slot in which bin. From there, you work backward: how many pages need to be consumed to reach that spot, and what combination of fields and sizes produces that many pages.</p>
 <p>Every single number comes from the heap layout of that specific build. Nothing is magic, nothing is random.</p>
 <p>People with heavy cybersecurity AI agents (with less restrictions) can automate finding those calibrations with the right tooling. But if you're a broke cybersecurity student like me?? Well.... you gotta spend a huge amount of nights studying the memory inside a lab like me..... until you eventually lose your mind and fail exactly like me too....</p>
 <p>Some useful tools for heap analysis if you want to dig deeper(good luck....):</p>
@@ -1424,7 +1596,7 @@ BOOM. Shell command executes.</code></pre>
 <li><strong><a href="https://github.com/pavja2">James Pavur (@pavja2)</a></strong>, for creating the <a href="https://github.com/pavja2/smbc-source-oct-2026">Steal My Bitcoin</a> challenge and giving the security community an opportunity to investigate PHP2Shell through a hands-on exploitation challenge.</li>
 </ul>
 <ul>
-<li><strong><a href="https://github.com/KillaBoi">KillaBoi (@KillaBoi)</a></strong>, for publishing your <a href="https://github.com/KillaBoi/StealMyBitcoin-PoC">exploit</a> and making it possible to study, reproduce, and compare your approach with my own. Congratulations again on solving the challenge!</li>
+<li><strong><a href="https://github.com/KillaBoi">KillaBoi (@KillaBoi)</a></strong>, for publishing your <a href="https://github.com/KillaBoi/StealMyBitcoin-PoC">exploit</a> and making it possible to study, reproduce, and compare. Congratulations again on solving the challenge!</li>
 </ul>
 <hr>
 <p style="text-align:center;margin:32px 0;font-size:14px;">Full source code, heap dumps, and interactive visualization available on <a href="https://github.com/djad04/php2shell-deep-dive" target="_blank" rel="noopener"><strong>GitHub</strong></a></p>
