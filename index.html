@@ -4,10 +4,42 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PHP2Shell</title>
-<meta name="description" content="A deep technical walkthrough of PHP2Shell — how CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26.">
-<meta property="og:title" content="PHP2Shell — Deep Dive">
-<meta property="og:description" content="From memory visualization to PHP source internals to exploit code. How two CVEs chain an OOM crash into RCE.">
+<meta name="description" content="A deep technical walkthrough of PHP2Shell — how CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26. Covers heap grooming, use-after-free, zend_string forgery, and full exploit pipeline.">
+<meta name="keywords" content="PHP2Shell, CVE-2026-109618, CVE-2026-109619, PHP exploit, use-after-free, heap grooming, RCE, remote code execution, PHP 8.4.26, zend_string, memory corruption, PHP security, OOM exploit, vulnerability research">
+<meta name="author" content="Ariane Djad">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://djad04.github.io/php2shell-deep-dive/">
+<link rel="icon" href="images/PHP2SHELL.png" type="image/png">
+<meta property="og:title" content="PHP2Shell Deep Dive — CVE-2026-109618 & CVE-2026-109619 Exploit Analysis">
+<meta property="og:description" content="From memory visualization to PHP source internals to exploit code. How two CVEs chain an OOM crash into RCE in PHP 8.4.26.">
 <meta property="og:type" content="article">
+<meta property="og:url" content="https://djad04.github.io/php2shell-deep-dive/">
+<meta property="og:image" content="https://djad04.github.io/php2shell-deep-dive/images/PHP2SHELL.png">
+<meta property="og:site_name" content="PHP2Shell Deep Dive">
+<meta property="article:author" content="Ariane Djad">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PHP2Shell Deep Dive — OOM to RCE Exploit Analysis">
+<meta name="twitter:description" content="How CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26.">
+<meta name="twitter:image" content="https://djad04.github.io/php2shell-deep-dive/images/PHP2SHELL.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "PHP2Shell Deep Dive — CVE-2026-109618 & CVE-2026-109619 OOM to RCE Exploit Analysis",
+  "description": "A deep technical walkthrough of PHP2Shell — how CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26.",
+  "author": { "@type": "Person", "name": "Ariane Djad" },
+  "url": "https://djad04.github.io/php2shell-deep-dive/",
+  "image": "https://djad04.github.io/php2shell-deep-dive/images/PHP2SHELL.png",
+  "datePublished": "2026-10-26",
+  "dateModified": "2026-11-09",
+  "keywords": ["PHP2Shell", "CVE-2026-109618", "CVE-2026-109619", "use-after-free", "heap grooming", "RCE", "PHP 8.4.26"],
+  "mainEntityOfPage": { "@type": "WebPage", "@id": "https://djad04.github.io/php2shell-deep-dive/" },
+  "publisher": { "@type": "Person", "name": "Ariane Djad" },
+  "inLanguage": "en",
+  "proficiencyLevel": "Expert",
+  "dependencies": "Basic C knowledge and general programming experience"
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -173,7 +205,7 @@ body {
 <nav class="toc-sidebar" id="tocSidebar"></nav>
 <main class="content-wrapper">
   <div class="article" id="article">
-<p><img src="images/PHP2SHELL.png" alt="" loading="lazy"></p>
+<p><img src="images/PHP2SHELL.png" alt="PHP2Shell — Deep dive into CVE-2026-109618 and CVE-2026-109619 exploit chain" loading="lazy"></p>
 <p>I started writing this research on October 26, 2026, and I'm not entirely sure when I'll finish it.</p>
 <p>At the time of writing, there is still very little information available about PHP2Shell, particularly when it comes to detailed technical analysis of the vulnerabilities and the exploitation process.</p>
 <p>Honestly, I was getting tired of finding explanations that only scratched the surface without actually showing what was happening internally. I wanted to do something different: a proper, in depth technical walkthrough that explores the entire process, examining every important detail and explaining not just WHAT happens, but WHY and HOW it happens.</p>
@@ -551,7 +583,7 @@ XXX...XXX (1KB of data)
 <h3 id="the-swiss-cheese-heap-grooming">The "Swiss Cheese" Heap grooming:</h3>
 <p>Instead of asking the operating system for memory one byte at a time, PHP's allocator grabs memory in large, clean blocks , usually 2 Megabytes (MB) at a time. It then slices those 2MB chunks into smaller slots for variables, strings, and arrays as your request runs.</p>
 <p>On a busy web server, the current 2MB chunk is messy. Previous HTTP requests have allocated and freed memory randomly, leaving us with a fragmented landscape of used data and random empty holes.</p>
-<p><img src="images/swisschesememory.jfif" alt="swisschese" loading="lazy"></p>
+<p><img src="images/swisschesememory.jfif" alt="Swiss cheese memory model — holes in heap memory after partial deallocation" loading="lazy"></p>
 <p>If we send the critical <code>PHP_SESSION_UPLOAD_PROGRESS</code> marker right now, PHP might drop it into one of those unpredictable holes. </p>
 <p>To avoid that, we start our request by sending 50 small, precisely calculated fields, just like the code above shows (from p0000 to p0049). By the time all 50 padding fields have been allocated, the leftover free spots from previous requests are completely consumed. The allocator's state is now clean and predictable.</p>
 <p>Now, I can already hear the technical folks typing furiously...</p>
@@ -748,7 +780,7 @@ For the stale pointer with ~32 chars: 24 + 32 + 1 = 57 bytes → rounded up to 6
 <h4 id="why-direct-replacement-doesnt-work">Why Direct Replacement Doesn't Work</h4>
 <p>Now here's the thing that trips everyone up. You might be thinking: "Why can't we just send the forged data with the exact same size as the stale pointer? It would go into bin 7 (64 bytes), the allocator would pop the stale pointer's old slot from the freelist, and our forged data lands right there. Done!"</p>
 <p>Here's the problem. When Request #1 crashes (OOM → bailout → <code>longjmp()</code>), PHP calls <code>zend_mm_shutdown()</code> which <strong>frees the entire chunk</strong>. Everything gets reset — all bins are emptied, all freelists cleared, the Wilderness frontier goes back to the beginning. It's like the whole 2 MiB block is wiped clean.</p>
-<p><img src="images/final_image2.png" alt="image2" loading="lazy"> > <strong>Phase 2: </strong> GDB showing <code>zend_mm_shutdown()</code> PS(id) still = <code>0x7f08e1874000</code>, memory still contains the session ID bytes, but after this function returns the entire heap is freed and PS(id) becomes a <strong>dangling pointer</strong>.</p>
+<p><img src="images/final_image2.png" alt="GDB showing zend_mm_shutdown with dangling pointer PS(id) after heap free" loading="lazy"> > <strong>Phase 2: </strong> GDB showing <code>zend_mm_shutdown()</code> PS(id) still = <code>0x7f08e1874000</code>, memory still contains the session ID bytes, but after this function returns the entire heap is freed and PS(id) becomes a <strong>dangling pointer</strong>.</p>
 <p>But here's what doesn't change: the <strong>physical memory</strong> at those addresses still exists, and the OS gives the same 2 MiB block right back to Request #2. The stale pointer is still pointing at the same address deep inside the chunk, at page 116 (in my GDB run, that was address <code>0x7f08e1874000</code>).</p>
 <p>So when Request #2 starts, the allocator is fresh. All bins start from scratch, claiming new pages from the Wilderness starting at the bottom. If we just send one 64-byte allocation, bin 7 grabs first available pages for example it may be 8 or 9, slices it into 64-byte slots, and gives us a slot there. That's <strong>nowhere near page 116</strong> ... and as we can see in the screenshot our pointer is on page 116.</p>
 <p>You see?? This is exactly why we can't send the forged data directly, the memory area our allocator is using hasn't even reached that place yet.</p>
@@ -788,7 +820,7 @@ For the stale pointer with ~32 chars: 24 + 32 + 1 = 57 bytes → rounded up to 6
 <p>See that?? That's the value of key "1050" the LAST padding field , its <code>zend_string</code> starts <strong>right at PS(id)</strong>, slot 0 on page 116. The <code>gc</code> header is at PS(id)+0x00, and <code>val[]</code> begins at PS(id)+0x18. Bin 8 kept claiming page after page from the Wilderness as we sent more and more fields, advancing the frontier deeper into the chunk. By the time we hit the 51st field, bin 8 reached page 116, and the last value landed at exactly this address.</p>
 <p>This isn't a coincidence, this is the entire point of the 51 fields. We needed the frontier to advance far enough to put a bin 8 slot right where the stale pointer is. And now that it's here, we're going to <strong>free it</strong>.</p>
 <p>One more thing you'll notice if you look at the raw dumps, each padding value actually appears <strong>twice</strong> in memory one right next to the other one. Why?? Because PHP's multipart parser creates multiple heap allocations for each field value. There's a temporary buffer where the raw bytes are first read from the HTTP body, and then <code>safe_php_register_variable()</code> calls <code>ZVAL_STRINGL()</code> which allocates a brand new <code>zend_string</code> by copying the bytes for the <code>$_POST</code> entry. For our 48 byte padding values, that <code>zend_string</code> copy is 24+48+1=73 bytes rounded to 80 bytes, which is bin 8. The temporary buffer gets freed but ZendMM doesn't zero freed memory, so the bytes stick around. That's why you see duplicate copies of "v0045", "v0046", etc. in the dumps.</p>
-<p><img src="images/DuplicatedInMemory.png" alt="duplicated" loading="lazy"></p>
+<p><img src="images/DuplicatedInMemory.png" alt="Session ID duplicated in memory  two copies of the same string in PHP heap" loading="lazy"></p>
 <p>The exact nature of that temporary buffer and what bin it falls into will become VERY important later when we try to understand how the forged data reaches PS(id). For now, just remember: each field value gets copied more than once during parsing, and the <code>zend_string</code> copy (bin 8, 80B) is the one that matters for page consumption.</p>
 <h4 id="the-repeated-key-1050-freeing-the-slot-at-psid">The Repeated Key 1050: Freeing the Slot at PS(id)</h4>
 <p>After the 51 padding fields, the exploit sends key <code>"1050"</code> again but this time with a much larger value: 128 bytes of <code>'Z'</code>. Since <code>"1050"</code> already exists in the <code>$_POST</code> array, PHP updates the existing entry rather than adding a new one. The old value gets freed, and a new, bigger value is allocated:</p>
@@ -870,7 +902,7 @@ New value (128 × 'Z'):  128 bytes → zend_string: 153B → Bin 12 (160B) → A
 <li>A <strong>freelist pointer</strong> at the first 8 bytes (PS(id)+0x00)</li>
 <li>An <strong>XOR validation value</strong> at the last 8 bytes (PS(id)+0x48, which is offset 72 = 80 minus 8)</li>
 </ul>
-<p><img src="images/final_image1Drawn.png" alt="part 3" loading="lazy"></p>
+<p><img src="images/final_image1Drawn.png" alt="Heap memory layout diagram showing chunk boundaries and zend_string placement" loading="lazy"></p>
 <p>Everything between those two zones survives. and we can check that in the dumps:</p>
 <pre><code>After forging : memory at PS(id):
 
@@ -1599,13 +1631,14 @@ bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer
 <li><strong><a href="https://github.com/KillaBoi">KillaBoi (@KillaBoi)</a></strong>, for publishing your <a href="https://github.com/KillaBoi/StealMyBitcoin-PoC">exploit</a> and making it possible to study, reproduce, and compare. Congratulations again on solving the challenge!</li>
 </ul>
 <hr>
-<p style="text-align:center;margin:32px 0;font-size:14px;">Full source code, heap dumps, and interactive visualization available on <a href="https://github.com/djad04/php2shell-deep-dive" target="_blank" rel="noopener"><strong>GitHub</strong></a></p>
+<p style="text-align:center;margin:32px 0 8px;font-size:15px;font-weight:600;color:var(--text-heading);letter-spacing:1px;">Written by Ariane Djad</p>
+<p style="text-align:center;margin:0 0 32px;font-size:14px;">Full source code, heap dumps, and interactive visualization available on <a href="https://github.com/djad04/php2shell-deep-dive" target="_blank" rel="noopener"><strong>GitHub</strong></a></p>
   </div>
 </main>
 <footer class="site-footer">
   <span class="author">DJAD_AR</span>
   <a href="https://github.com/djad04/php2shell-deep-dive" target="_blank" rel="noopener" style="color:#e8d5b7;text-decoration:none;border-bottom:1px solid #c4671d;">GitHub Repo</a>
-  <span>PHP2SHELL — DEEP DIVE</span>
+  <span>PHP2SHELL DEEP DIVE</span>
 </footer>
 <a href="#" class="back-to-top" id="backToTop" title="Back to top">&#8593;</a>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
