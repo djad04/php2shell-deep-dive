@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://djad04.github.io/php2shell-deep-dive/sitemap.xml

@@ -3,23 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PHP2Shell</title>
-<meta name="description" content="A deep technical walkthrough of PHP2Shell — how CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26. Covers heap grooming, use-after-free, zend_string forgery, and full exploit pipeline.">
+<title>PHP2SHELL Deep Dive</title>
+<meta name="description" content="A deep technical walkthrough of PHP2Shell: the full exploit pipeline, PHP internals and the source code responsible for it, memory analysis of what's happening on the heap and how it gets manipulated to achieve remote code execution. Covers CVE-2026-109618 and CVE-2026-109619 in PHP 8.4.26.">
 <meta name="keywords" content="PHP2Shell, CVE-2026-109618, CVE-2026-109619, PHP exploit, use-after-free, heap grooming, RCE, remote code execution, PHP 8.4.26, zend_string, memory corruption, PHP security, OOM exploit, vulnerability research">
 <meta name="author" content="Ariane Djad">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="https://djad04.github.io/php2shell-deep-dive/">
 <link rel="icon" href="images/PHP2SHELL.png" type="image/png">
-<meta property="og:title" content="PHP2Shell Deep Dive — CVE-2026-109618 & CVE-2026-109619 Exploit Analysis">
-<meta property="og:description" content="From memory visualization to PHP source internals to exploit code. How two CVEs chain an OOM crash into RCE in PHP 8.4.26.">
+<meta property="og:title" content="PHP2Shell Deep Dive">
+<meta property="og:description" content="A deep technical walkthrough of PHP2Shell: the full exploit pipeline, PHP internals and the source code responsible for it, memory analysis of what's happening on the heap and how it gets manipulated to achieve remote code execution. Covers CVE-2026-109618 and CVE-2026-109619 in PHP 8.4.26.">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://djad04.github.io/php2shell-deep-dive/">
 <meta property="og:image" content="https://djad04.github.io/php2shell-deep-dive/images/PHP2SHELL.png">
 <meta property="og:site_name" content="PHP2Shell Deep Dive">
 <meta property="article:author" content="Ariane Djad">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="PHP2Shell Deep Dive — OOM to RCE Exploit Analysis">
-<meta name="twitter:description" content="How CVE-2026-109618 and CVE-2026-109619 chain an out-of-memory crash into remote code execution in PHP 8.4.26.">
+<meta name="twitter:title" content="PHP2Shell Deep Dive">
+<meta name="twitter:description" content="A deep technical walkthrough of PHP2Shell: the full exploit pipeline, PHP internals and the source code responsible for it, memory analysis of what's happening on the heap and how it gets manipulated to achieve remote code execution. Covers CVE-2026-109618 and CVE-2026-109619 in PHP 8.4.26.">
 <meta name="twitter:image" content="https://djad04.github.io/php2shell-deep-dive/images/PHP2SHELL.png">
 <script type="application/ld+json">
 {
