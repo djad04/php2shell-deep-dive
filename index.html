@@ -285,8 +285,6 @@ int main() {
 <p>Here, when we print <code>a</code> and <code>b</code>, we may find that they contain the same numerical memory address.</p>
 <p>Why? Because <code>malloc()</code> may reuse the memory previously allocated to <code>a</code> after we call <code>free(a)</code>, avoiding the need to obtain another block of memory.</p>
 <p>This isn't guaranteed to happen every time, but it's a common behavior.</p>
-<img src="images/MemorygetsRecyced.svg" width="100%" >
-<br clear="both">
 <h2 id="how-is-this-dangerous-the-tale-of-the-stale-pointer">How is This Dangerous? The Tale of the Stale Pointer</h2>
 <img src="images/Tale_of_stale_pointer.jpg" width="100%"  >
 <p>This brings us to the core of the issue. We know that memory gets recycled, but what happens to the variables that were holding those memory addresses?</p>
