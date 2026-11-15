@@ -173,11 +173,11 @@ if (a_stale->is_admin) {
 
 With this, we may access data we're not supposed to see, such as Jack's username, and the program might make an incorrect authorization decision.
 
-Technically, accessing freed memory is "undefined behavior" in C/C++, so the exact result isn't guaranteed depending on the compiler and system. But this illustrates the underlying problem.
+Technically, this is undefined behavior so the result isn't guaranteed. But the example illustrates the underlying problem and also in reality it's not this simple because you're going to tell me: "Yeah, this is nice, but..."
 
-In reality, however, it's not quite this simple. You're probably thinking: "Yeah, this is nice, but..."
+For this to work, we need a stale pointer in the first place. In a real attack, we don't write the victim's program, so we can't just keep one ourselves.
 
-For this to work, we need a stale pointer in the first place. In a real attack, we aren't writing the victim's program, so we can't just intentionally save a pointer to a variable like we did with a_stale. The bug has to already exist inside the code...
+The bug has to already exist inside the program: it frees something while another part of the code still holds a pointer to it.
 
 The attacker only gets to influence what lands in that freed memory slot.
 
@@ -224,8 +224,6 @@ Now imagine `b` wasn't a simple integer but something important, like an `is_adm
 That's where this becomes a potential security vulnerability and not just a bug.
 
 ## So where does PHP get its own stale pointer?
-
-Earlier I said: *"The bug has to already exist inside the program: it frees something while another part of the code still holds a pointer to it."*
 
 This is exactly the question we need to answer for PHP2Shell. PHP doesn't hand an attacker a stale pointer on purpose... no, PHP isn't that generous.
 
@@ -1593,57 +1591,19 @@ There's a LOT going on here. Let me break it down piece by piece.
 
 **The 1000 nested fields** are NOT for leaking anything this time. They're the OOM fuel again, similar to Stage 1. But they use a different nesting depth (54 instead of 57) and they exist to set up the memory landscape before the real payload arrives.
 
-**The primer** is a 276-byte value stuffed with `Q` characters (0x51), except at byte offset 104 (slot 13 × 8 bytes), where the target heap address is written as a raw 8-byte little-endian value. During the OOM cleanup, PHP's internal routines walk through various data structures. One of those walks reads a pointer from this exact position. If that pointer points to a valid address on the heap, PHP follows it and tries to destroy whatever is there.
+**The primer** is a 276-byte value stuffed with `Q` characters (0x51), except at byte offset 104 (slot 13 × 8 bytes), where the target heap address(the address of our forged hashtable) is written as a raw 8-byte little endian value.this is what we will use to overwrite a bucket
 
 **The hold:** which is just our forged payload (the 3 structures we saw earlier with the forged hashtable)
 
 **The order of the last four fields is CRITICAL.** The "hold" field must be parsed and its value (`forged`) must be allocated on the heap **before** the last giant field name (`K` × 128000 + `[x]`) triggers the final OOM. 
-
-Here's the timeline:
-
-```text
-PHP starts parsing the final request
-      │
-      ▼
-1000 nested fields parsed → memory fills up but doesn't OOM yet
-      │
-      ▼
-Primer field parsed → 276 bytes in 320-byte bin slot, target pointer at offset 104
-  Name is "" → php_register_variable_ex discards it → slot FREED to 320-byte freelist
-      │
-      ▼
-Spacer "a" registered to $_REQUEST → first string key triggers zend_hash_real_init_mixed
-  _emalloc_320 grabs the primer's freed slot → primer data survives in bucket region
-      │
-      ▼
-"hold" field parsed → 384-byte forged HashTable allocated at predictable address
-      │
-      ▼
-Giant field name "KKK...K[x]" registered → zend_hash_str_update increments nNumUsed
-  to 3 BEFORE allocating the key string → _emalloc fires
-      │
-      X  OUT OF MEMORY! nNumUsed=3 but bucket[2] was never written
-      │
-      ▼
-zend_bailout() → cleanup begins → zend_array_destroy walks $_REQUEST
-      │
-      ▼
-bucket[0]="a", bucket[1]="hold" freed normally
-bucket[2]: residual primer data → val=TARGET_ADDRESS, type_info=0x51515151
-  type IS_TYPE_REFCOUNTED bit is set → PHP dereferences TARGET_ADDRESS
-      │
-      ▼
-TARGET_ADDRESS → forged HashTable → pDestructor = zif_system → system(command)
-      │
-      ▼
-BOOM. Shell command executes.
-```
 
 ### The primer mechanism:
 
 we answered most of the question except one: how do we overwrite a bucket?
 
 The primer field has an empty name, meaning PHP never actually inserts it into $_POST. So how can a field that PHP immediately discards end up influencing where the cleanup routine goes?
+
+To understand this, lets first look at how PHP represents arrays and their elements internally.
 
 Consider the following PHP array:
 
@@ -1676,7 +1636,7 @@ each Bucket contains three fields:
 
 - key: A pointer to the zend_string containing the key. It is NULL for integer keys.
 
-just look at zval if we go to the source code to check what does that represent internally, we will find this : 
+just look at zval if we go to the source code to check what that represents internally, we will find this : 
 
 ```c
 struct _zval_struct {
@@ -1906,6 +1866,46 @@ primer freed → slot recycled for arData → bucket[2] = primer ghost
     → follows bucket[2].val.value.arr → forged HashTable
     → gc.type = IS_ARRAY → zend_array_destroy
     → pDestructor at offset 0x30 = zif_system → system(command) → RCE
+```
+
+### The full timeline:
+
+```text
+PHP starts parsing the final request
+      │
+      ▼
+1000 nested fields parsed → memory fills up but doesn't OOM yet
+      │
+      ▼
+Primer field parsed → 276 bytes in 320-byte bin slot, target pointer at offset 104
+  Name is "" → php_register_variable_ex discards it → slot FREED to 320-byte freelist
+      │
+      ▼
+Spacer "a" registered to $_REQUEST → first string key triggers zend_hash_real_init_mixed
+  _emalloc_320 grabs the primer's freed slot → primer data survives in bucket region
+      │
+      ▼
+"hold" field parsed → 384-byte forged HashTable allocated at predictable address
+      │
+      ▼
+Giant field name "KKK...K[x]" registered → zend_hash_str_update increments nNumUsed
+  to 3 BEFORE allocating the key string → _emalloc fires
+      │
+      X  OUT OF MEMORY! nNumUsed=3 but bucket[2] was never written
+      │
+      ▼
+zend_bailout() → cleanup begins → zend_array_destroy walks $_REQUEST
+      │
+      ▼
+bucket[0]="a", bucket[1]="hold" freed normally
+bucket[2]: residual primer data → val=TARGET_ADDRESS, type_info=0x51515151
+  type IS_TYPE_REFCOUNTED bit is set → PHP dereferences TARGET_ADDRESS
+      │
+      ▼
+TARGET_ADDRESS → forged HashTable → pDestructor = zif_system → system(command)
+      │
+      ▼
+BOOM. Shell command executes.
 ```
 
 ### ok the command is running.. how does its output get back to us?

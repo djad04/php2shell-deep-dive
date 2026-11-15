@@ -31,7 +31,7 @@
   "url": "https://djad04.github.io/php2shell-deep-dive/",
   "image": "https://djad04.github.io/php2shell-deep-dive/images/PHP2SHELL.png",
   "datePublished": "2026-10-26",
-  "dateModified": "2026-11-09",
+  "dateModified": "2026-11-15",
   "keywords": ["PHP2Shell", "CVE-2026-109618", "CVE-2026-109619", "use-after-free", "heap grooming", "RCE", "PHP 8.4.26"],
   "mainEntityOfPage": { "@type": "WebPage", "@id": "https://djad04.github.io/php2shell-deep-dive/" },
   "publisher": { "@type": "Person", "name": "Ariane Djad" },
@@ -323,9 +323,9 @@ b-&gt;is_admin = 1;</code></pre>
     printf("Welcome admin %s\n", a_stale-&gt;username);
 }</code></pre>
 <p>With this, we may access data we're not supposed to see, such as Jack's username, and the program might make an incorrect authorization decision.</p>
-<p>Technically, accessing freed memory is "undefined behavior" in C/C++, so the exact result isn't guaranteed depending on the compiler and system. But this illustrates the underlying problem.</p>
-<p>In reality, however, it's not quite this simple. You're probably thinking: "Yeah, this is nice, but..."</p>
-<p>For this to work, we need a stale pointer in the first place. In a real attack, we aren't writing the victim's program, so we can't just intentionally save a pointer to a variable like we did with a_stale. The bug has to already exist inside the code...</p>
+<p>Technically, this is undefined behavior so the result isn't guaranteed. But the example illustrates the underlying problem and also in reality it's not this simple because you're going to tell me: "Yeah, this is nice, but..."</p>
+<p>For this to work, we need a stale pointer in the first place. In a real attack, we don't write the victim's program, so we can't just keep one ourselves.</p>
+<p>The bug has to already exist inside the program: it frees something while another part of the code still holds a pointer to it.</p>
 <p>The attacker only gets to influence what lands in that freed memory slot.</p>
 <p>For now, just make sure you understand this deeply, because the answer to that question will be the most important part of the PHP CVEs we're discussing.</p>
 <h3 id="modifying-another-objects-data-memory-corruption">Modifying another object's data (Memory Corruption)</h3>
@@ -361,7 +361,6 @@ int main() {
 <p>Now imagine <code>b</code> wasn't a simple integer but something important, like an <code>is_admin</code> flag, a length, or a function pointer.</p>
 <p>That's where this becomes a potential security vulnerability and not just a bug.</p>
 <h2 id="so-where-does-php-get-its-own-stale-pointer">So where does PHP get its own stale pointer?</h2>
-<p>Earlier I said: <em>"The bug has to already exist inside the program: it frees something while another part of the code still holds a pointer to it."</em></p>
 <p>This is exactly the question we need to answer for PHP2Shell. PHP doesn't hand an attacker a stale pointer on purpose... no, PHP isn't that generous.</p>
 <p>That pointer is the result of a subtle flaw in how a legitimate PHP feature interacts with the error handling mechanism of the Zend Engine (PHP's core).</p>
 <h3 id="php-workers-are-not-one-program-one-run">PHP workers are not "one program, one run"</h3>
@@ -1300,45 +1299,13 @@ target = heap_base - HEAP_CARRIER_DELTA + HEAP_CARRIER_OFFSET</code></pre>
     return close_multipart(fields, bnd)</code></pre>
 <p>There's a LOT going on here. Let me break it down piece by piece.</p>
 <p><strong>The 1000 nested fields</strong> are NOT for leaking anything this time. They're the OOM fuel again, similar to Stage 1. But they use a different nesting depth (54 instead of 57) and they exist to set up the memory landscape before the real payload arrives.</p>
-<p><strong>The primer</strong> is a 276-byte value stuffed with <code>Q</code> characters (0x51), except at byte offset 104 (slot 13 × 8 bytes), where the target heap address is written as a raw 8-byte little-endian value. During the OOM cleanup, PHP's internal routines walk through various data structures. One of those walks reads a pointer from this exact position. If that pointer points to a valid address on the heap, PHP follows it and tries to destroy whatever is there.</p>
-<p>So the primer is basically telling PHP: "Hey, when you clean up after the OOM crash, go look at this specific address." And what's sitting at that address? The forged HashTable.</p>
+<p><strong>The primer</strong> is a 276-byte value stuffed with <code>Q</code> characters (0x51), except at byte offset 104 (slot 13 × 8 bytes), where the target heap address(the address of our forged hashtable) is written as a raw 8-byte little endian value.this is what we will use to overwrite a bucket</p>
 <p><strong>The hold:</strong> which is just our forged payload (the 3 structures we saw earlier with the forged hashtable)</p>
 <p><strong>The order of the last four fields is CRITICAL.</strong> The "hold" field must be parsed and its value (<code>forged</code>) must be allocated on the heap <strong>before</strong> the last giant field name (<code>K</code> × 128000 + <code>[x]</code>) triggers the final OOM.</p>
-<p>Here's the timeline:</p>
-<pre data-lang="text"><code class="language-text">PHP starts parsing the final request
-      │
-      ▼
-1000 nested fields parsed → memory fills up but doesn't OOM yet
-      │
-      ▼
-Primer field parsed → 276 bytes allocated, target pointer planted at slot 13
-      │
-      ▼
-Spacer field "a" parsed → small allocation, fine-tunes frontier
-      │
-      ▼
-"hold" field parsed → 384-byte forged HashTable allocated on the heap ← THIS MUST HAPPEN FIRST
-      │
-      ▼
-Giant field name "KKK...K[x]" parsed → 128,000+ byte field name
-PHP tries to allocate nested arrays for all those brackets
-      │
-      X  OUT OF MEMORY!
-      │
-      ▼
-zend_bailout() → cleanup begins
-      │
-      ▼
-Cleanup follows the primer's pointer at slot 13 → finds the forged HashTable
-      │
-      ▼
-Reads pDestructor = zif_system → calls it with our command
-      │
-      ▼
-BOOM. Shell command executes.</code></pre>
 <h3 id="the-primer-mechanism">The primer mechanism:</h3>
 <p>we answered most of the question except one: how do we overwrite a bucket?</p>
 <p>The primer field has an empty name, meaning PHP never actually inserts it into $_POST. So how can a field that PHP immediately discards end up influencing where the cleanup routine goes?</p>
+<p>To understand this, lets first look at how PHP represents arrays and their elements internally.</p>
 <p>Consider the following PHP array:</p>
 <pre data-lang="php"><code class="language-php">$data = [
     "profile" =&gt; [
@@ -1504,6 +1471,42 @@ bucket[2].val.u1.type_info = 0x51515151;           // four 'Q' bytes from primer
     → follows bucket[2].val.value.arr → forged HashTable
     → gc.type = IS_ARRAY → zend_array_destroy
     → pDestructor at offset 0x30 = zif_system → system(command) → RCE</code></pre>
+<h3 id="the-full-timeline">The full timeline:</h3>
+<pre data-lang="text"><code class="language-text">PHP starts parsing the final request
+      │
+      ▼
+1000 nested fields parsed → memory fills up but doesn't OOM yet
+      │
+      ▼
+Primer field parsed → 276 bytes in 320-byte bin slot, target pointer at offset 104
+  Name is "" → php_register_variable_ex discards it → slot FREED to 320-byte freelist
+      │
+      ▼
+Spacer "a" registered to $_REQUEST → first string key triggers zend_hash_real_init_mixed
+  _emalloc_320 grabs the primer's freed slot → primer data survives in bucket region
+      │
+      ▼
+"hold" field parsed → 384-byte forged HashTable allocated at predictable address
+      │
+      ▼
+Giant field name "KKK...K[x]" registered → zend_hash_str_update increments nNumUsed
+  to 3 BEFORE allocating the key string → _emalloc fires
+      │
+      X  OUT OF MEMORY! nNumUsed=3 but bucket[2] was never written
+      │
+      ▼
+zend_bailout() → cleanup begins → zend_array_destroy walks $_REQUEST
+      │
+      ▼
+bucket[0]="a", bucket[1]="hold" freed normally
+bucket[2]: residual primer data → val=TARGET_ADDRESS, type_info=0x51515151
+  type IS_TYPE_REFCOUNTED bit is set → PHP dereferences TARGET_ADDRESS
+      │
+      ▼
+TARGET_ADDRESS → forged HashTable → pDestructor = zif_system → system(command)
+      │
+      ▼
+BOOM. Shell command executes.</code></pre>
 <h3 id="ok-the-command-is-running-how-does-its-output-get-back-to-us">ok the command is running.. how does its output get back to us?</h3>
     
 <p>Think about it. The command is being executed inside a cleanup callback. PHP isn't in the middle of building an HTTP response. It's in the middle of tearing down a failed request. There's no output buffer connected to the client. If we just ran <code>cat /etc/passwd</code>, the output would vanish into the server's stdout (maybe a log file, maybe <code>/dev/null</code>).</p>
